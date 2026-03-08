@@ -311,6 +311,36 @@ class RS_FlipFlop_V1:
         # self.q_bar = self.nor_gate2([self.q, s])
 
         # 3. iterate until stable
+
+# (PengChen / Gemini:)
+# In a physical RS Flip-Flop, the two NOR gate are across-wired.
+# The output of Gate 1(Q) flows into the input of Gate2. At the exact
+# same time, the output of Gates (Q_bar) flows into the input of Gate 1.
+# When you flip a switch in real life, electrons flow through both gates
+# simultaneously.
+
+# But python does not execute simultaneously; it executes one line at a time.
+
+# if without loop, run into a "race condition":
+#  1. If python calculates Q first, it uses the old Q_bar to do the math.
+#  2. If python calculates Q_bar first, it uses the old Q to do the math.
+# Depending on which line of code you type first, your hardware behaves differently!
+# In physical hardware, the order doesn't matter because both happen at once.
+
+# loops to simulate electrons settling.
+# When inputs (R, S) change, the signals in a real circuit bounce back and forth through
+# the gates for a tiny fraction of a nanosecond until they reach an equilibrium (a stable state).
+
+# ------------------------------------
+# The while True: loop perfectly mimics this physical bouncing:
+# 1. Calculate the new reality: it evaluates what both gates want to output right now, based on the 
+#    the current wires.
+# 2. Check for stability: It asks, "did either of the outputs change?" 
+# 3. If no: The circuit has stabilized! The electrons are done bouncing. 
+# 4. If yse: The outputs did change. That means those new outputs need to flow back into the inputs
+#    of the opposite gates. We update our internal memory (self.q = new_q) and loop again.
+# ------------------------------------
+
         while True:
             new_q = self.nor_gate1([r, self.q_bar])
             new_q_bar = self.nor_gate2([s, self.q])
