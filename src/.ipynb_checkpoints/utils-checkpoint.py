@@ -122,7 +122,7 @@ class FullAdder:
         # Return them as a tuple
         return final_carry, final_sum
 
-class nBit_Adder:
+class NBitAdderWithCarryOut:
     def __init__(self, nbits):
         self.nbits = nbits # Carry_In, A, and B
         # Instantiate 'n' Full Adders
@@ -166,7 +166,7 @@ class nBit_Adder:
 #     return int(bin_str, 2)
 
 
-# include some basic data process function and nBit_Adder_with_two_complement
+# include some basic data process function and NBitAdderWithOverflow
 def int_to_nbit_list(num, nbits=8):
     """
     Converts an integer to an n-bit list using our simulated hardware 
@@ -186,7 +186,7 @@ def int_to_nbit_list(num, nbits=8):
     inverted_bits = [my_inverter([bit]) for bit in bit_list]
 
     # Step B: Wire up an adder to add 1
-    adder = nBit_Adder(nbits)
+    adder = NBitAdderWithCarryOut(nbits)
     
     # Step B: Add 0, but set the Carry-In pin to 1
     zero_bits = [0 for _ in range(nbits)]
@@ -217,7 +217,7 @@ def bit_list_to_int(bit_list, signed=True):
             
     return val
 
-class nBit_Adder_with_two_complement:
+class NBitAdderWithOverflow:
     def __init__(self, nbits):
         self.nbits = nbits # Carry_In, A, and B
         # Instantiate 'n' Full Adders
@@ -280,7 +280,7 @@ class Oscillator:
         self.state = 1 - self.state
         return self.state
 
-class RS_FlipFlop_V1:
+class ResetSetFlipFlop:
     def __init__(self):
         self.nin = 2
         self.nor_gate1 = NOR()
@@ -356,11 +356,11 @@ class RS_FlipFlop_V1:
                 break
         return self.q, self.q_bar
 
-class RS_FlipFlop_V2:
+class ResetSetFlipFlop4Input:
     def __init__(self):
         # Edge-Triggered D-Type Flip-Flop with Clear and Preset (page 238)
         self.nin = 4 # r0, r1, s0, s1
-        self.rs_flipflop = RS_FlipFlop_V1()
+        self.rs_flipflop = ResetSetFlipFlop()
         self.or_gate1 = OR()
         self.or_gate2 = OR()
 
@@ -379,7 +379,7 @@ class RS_FlipFlop_V2:
         q, q_bar = self.rs_flipflop([r, s])
         return q, q_bar
 
-class Level_Triggered_D_Latch_V1:
+class LevelTriggeredDTypeFlipFlop:
     def __init__(self):
         self.nin = 2
         self.invert = Inverter()
@@ -388,7 +388,7 @@ class Level_Triggered_D_Latch_V1:
         self.and_gate1 = AND()
         self.and_gate2 = AND()
         
-        self.rs_flipflop = RS_FlipFlop_V1()
+        self.rs_flipflop = ResetSetFlipFlop()
 
     def getQ(self):
         return self.rs_flipflop.getQ()
@@ -414,7 +414,7 @@ class Level_Triggered_D_Latch_V1:
 
         return q, q_bar
 
-class Level_Triggered_D_Latch_V2:
+class LevelTriggeredDTypeFlipFlopWithClear:
     def __init__(self):
         self.nin = 3 # data, clk, clr
         self.invert_data = Inverter()
@@ -425,7 +425,7 @@ class Level_Triggered_D_Latch_V2:
         self.and_gate_s = AND(3) # upgraded to 3 inputs
         self.or_gate = OR()
         
-        self.rs_flipflop = RS_FlipFlop_V1()
+        self.rs_flipflop = ResetSetFlipFlop()
 
     def getQ(self):
         return self.rs_flipflop.getQ()
@@ -456,11 +456,11 @@ class Level_Triggered_D_Latch_V2:
 
         return q, q_bar
 
-class nBitLevelTriggeredDLatch:
+class NBitLevelTriggeredDTypeFlipFlopWithClear:
     def __init__(self, nbits):
         self.nbits = nbits
         # Solder 'n' D-Latches onto the board side-by-side
-        self.level_d_latchs = [Level_Triggered_D_Latch_V2() for _ in range(self.nbits)]
+        self.level_d_latchs = [LevelTriggeredDTypeFlipFlopWithClear() for _ in range(self.nbits)]
 
     # We separate the data bus (a list) from the clock (a single bit)
     def __call__(self, datas, clk):
@@ -481,12 +481,12 @@ class nBitLevelTriggeredDLatch:
 # A circuit that only triggers on the clock's
 # transition (Edge-Triggered) is called
 # a Flip-Flop.
-class Edge_Triggered_D_Flip_Flop_V1:
+class EdgeTriggeredDTypeFlipFlop:
     def __init__(self):
         self.nin = 2
 
-        self.level_d_latchs_stage1 = Level_Triggered_D_Latch_V1()
-        self.level_d_latchs_stage2 = Level_Triggered_D_Latch_V1()
+        self.level_d_latchs_stage1 = LevelTriggeredDTypeFlipFlop()
+        self.level_d_latchs_stage2 = LevelTriggeredDTypeFlipFlop()
         self.invert1 = Inverter()
         # self.q, self.q_bar = 0, 1
 
@@ -510,12 +510,12 @@ class Edge_Triggered_D_Flip_Flop_V1:
         q2, q_bar2 = self.level_d_latchs_stage2([q1, clock])
         return q2, q_bar2
 
-class Edge_Triggered_D_Flip_Flop_V2:
+class EdgeTriggeredDTypeFlipFlopWithPresetAndClear:
     def __init__(self):
         self.nin = 4
-        self.rs_flipflop1 = RS_FlipFlop_V2()
-        self.rs_flipflop2 = RS_FlipFlop_V2()
-        self.rs_flipflop3 = RS_FlipFlop_V2()
+        self.rs_flipflop1 = ResetSetFlipFlop4Input()
+        self.rs_flipflop2 = ResetSetFlipFlop4Input()
+        self.rs_flipflop3 = ResetSetFlipFlop4Input()
         self.invert1 = Inverter()
         
     def getQ(self):
@@ -552,12 +552,12 @@ class Edge_Triggered_D_Flip_Flop_V2:
         
         return q3, q_bar3
 
-class nBit_Edge_Triggered_Register:
+class NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear:
     def __init__(self, nbits):
         self.nbits = nbits
         
         # Solder 'n' Edge-Triggered D-Flip-Flops onto the board side-by-side
-        self.flip_flops = [Edge_Triggered_D_Flip_Flop_V2() for _ in range(self.nbits)]
+        self.flip_flops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
 
     def __call__(self, datas, clk):
         assert len(datas) == self.nbits, f"Data bus must be {self.nbits} bits long"
@@ -571,11 +571,11 @@ class nBit_Edge_Triggered_Register:
             
         return qs
 
-class nBitAccumulatorV1:
+class NBitsAccumulator:
     def __init__(self, nbits):
         self.nbits = nbits
-        self.adder = nBit_Adder_with_two_complement(self.nbits)
-        self.register = nBit_Edge_Triggered_Register(self.nbits)
+        self.adder = NBitAdderWithOverflow(self.nbits)
+        self.register = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
         # At boot-up, the memory holds all zeros
         self.current_memory = [0 for _ in range(self.nbits)]
 
@@ -613,12 +613,12 @@ class nBitAccumulatorV1:
         # Button goes back up (Clk = 0)
         self.register(sum_bits, 0)        
 
-class Frequency_Divider:
+class FrequencyDivider:
     def __init__(self):
         self.nin = 2
         # init self.state = 0
         self.oscillator = Oscillator() 
-        self.flipflop = Edge_Triggered_D_Flip_Flop_V1()
+        self.flipflop = EdgeTriggeredDTypeFlipFlop()
 
         
     def __call__(self):
@@ -629,10 +629,10 @@ class Frequency_Divider:
         q, q_bar = self.flipflop([data, clk])
         return q, q_bar
 
-class nBitsRippleCounter:
+class NBitsFrequencyDivider:
     def __init__(self, nbits):
         self.nbits = nbits
-        self.flipflops = [Edge_Triggered_D_Flip_Flop_V2() for _ in range(self.nbits)]
+        self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
 
     def __call__(self, clk = 0):
         current_clk = clk
@@ -645,11 +645,11 @@ class nBitsRippleCounter:
         # MSB is on the left
         return list(reversed(qs))
 
-class Decade_Counter_10:
+class Counter0_9:
     """A module-10 Ripple Counter that counts from 0 to 9 and resets. """
     def __init__(self,):
         self.nbits = 4
-        self.flipflops = [Edge_Triggered_D_Flip_Flop_V2() for _ in range(self.nbits)]
+        self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
         self.and_gate = AND()
 
     def getQs(self):
@@ -688,11 +688,11 @@ class Decade_Counter_10:
         # Return with MSB on the left for easy reading
         return list(reversed(new_qs))
 
-class Decade_Counter_6:
+class Counter0_5:
     """A module-6 Ripple Counter that counts from 0 to 5 and resets. """
     def __init__(self,):
         self.nbits = 3
-        self.flipflops = [Edge_Triggered_D_Flip_Flop_V2() for _ in range(self.nbits)]
+        self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
         self.and_gate = AND()
         
     def getQs(self):
@@ -750,10 +750,10 @@ class Decade_Counter_6:
         # Return with MSB on the left for easy reading
         return list(reversed(new_qs))
 
-class Second_Timer:
+class SecondTimer:
     def __init__(self):
-        self.decade_counter_6 = Decade_Counter_6()
-        self.decade_counter_10 = Decade_Counter_10()
+        self.decade_counter_6 = Counter0_5()
+        self.decade_counter_10 = Counter0_9()
         self.nand_gate = NAND()
 
     def getBitsOfLow(self):
@@ -770,10 +770,10 @@ class Second_Timer:
         bits_of_digit6 = self.decade_counter_6(clk_of_digit6)
         return bits_of_digit6, bits_of_digit10
 
-class Minute_Timer:
+class MinuteTimer:
     def __init__(self):
-        self.decade_counter_6 = Decade_Counter_6()
-        self.decade_counter_10 = Decade_Counter_10()
+        self.decade_counter_6 = Counter0_5()
+        self.decade_counter_10 = Counter0_9()
         self.nand_gate = NAND()
 
     def getBitsOfLow(self):
@@ -790,10 +790,10 @@ class Minute_Timer:
         bits_of_digit6 = self.decade_counter_6(clk_of_digit6)
         return bits_of_digit6, bits_of_digit10
 
-class Hour_Timer:
+class HourTimer:
     def __init__(self):
         self.nbits = 5        
-        self.flipflops = [Edge_Triggered_D_Flip_Flop_V2() for _ in range(self.nbits)]
+        self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
                 
         self.nand_gate = NAND()
         self.and_gate_10 = AND(2) # Detects the 10
@@ -852,18 +852,18 @@ class Hour_Timer:
         # Return with MSB on the left for easy reading
         return list(reversed(new_qs))
 
-class Hour_Minute_Second_Timer_V2:
+class HourMinuteSecondTimer:
     # adding switches to set the time manually(hour and minute and second)
     def __init__(self):
-        self.hour_timer = Hour_Timer()
-        self.minute_timer = Minute_Timer()
-        self.second_timer = Second_Timer()
+        self.hour_timer = HourTimer()
+        self.minute_timer = MinuteTimer()
+        self.second_timer = SecondTimer()
         self.nand_gate_min_sec = NAND()
         
         self.nand_gate_hour_min = NAND()
         self.nand_gate_pm_am = NAND()
         # A toggle flip-flop to store AM (0) or PM (1)
-        self.am_pm_memory = Edge_Triggered_D_Flip_Flop_V2()
+        self.am_pm_memory = EdgeTriggeredDTypeFlipFlopWithPresetAndClear()
 
         self.switch_sec = XOR()
         self.switch_min = XOR()

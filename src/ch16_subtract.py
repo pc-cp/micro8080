@@ -1,5 +1,5 @@
 # ch16_subtract.py
-# include some basic data process function and nBit_Adder_with_two_complement
+# include some basic data process function and NBitAdderWithOverflow
 def int_to_nbit_list(num, nbits=8):
     """
     Converts an integer to an n-bit list using our simulated hardware 
@@ -19,7 +19,7 @@ def int_to_nbit_list(num, nbits=8):
     inverted_bits = [my_inverter([bit]) for bit in bit_list]
 
     # Step B: Wire up an adder to add 1
-    adder = nBit_Adder(nbits)
+    adder = NBitAdderWithCarryOut(nbits)
     
     # Step B: Add 0, but set the Carry-In pin to 1
     zero_bits = [0 for _ in range(nbits)]
@@ -50,7 +50,7 @@ def bit_list_to_int(bit_list, signed=True):
             
     return val
 
-class nBit_Adder_with_two_complement:
+class NBitAdderWithOverflow:
     def __init__(self, nbits):
         self.nbits = nbits # Carry_In, A, and B
         # Instantiate 'n' Full Adders

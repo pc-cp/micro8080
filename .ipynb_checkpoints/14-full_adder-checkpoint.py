@@ -120,7 +120,7 @@ class FullAdder:
         # Return them as a tuple
         return final_carry, final_sum
 
-class nBit_Adder:
+class NBitAdderWithCarryOut:
     def __init__(self, nbits):
         self.nbits = nbits # Carry_In, A, and B
         # Instantiate 'n' Full Adders

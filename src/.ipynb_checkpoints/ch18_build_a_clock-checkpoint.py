@@ -3,11 +3,11 @@ sys.path.append("../src")
 
 from utils import *
 
-class Decade_Counter_10:
+class Counter0_9:
     """A module-10 Ripple Counter that counts from 0 to 9 and resets. """
     def __init__(self,):
         self.nbits = 4
-        self.flipflops = [Edge_Triggered_D_Flip_Flop_V2() for _ in range(self.nbits)]
+        self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
         self.and_gate = AND()
 
     def getQs(self):
@@ -46,11 +46,11 @@ class Decade_Counter_10:
         # Return with MSB on the left for easy reading
         return list(reversed(new_qs))
 
-class Decade_Counter_6:
+class Counter0_5:
     """A module-6 Ripple Counter that counts from 0 to 5 and resets. """
     def __init__(self,):
         self.nbits = 3
-        self.flipflops = [Edge_Triggered_D_Flip_Flop_V2() for _ in range(self.nbits)]
+        self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
         self.and_gate = AND()
         
     def getQs(self):
@@ -108,10 +108,10 @@ class Decade_Counter_6:
         # Return with MSB on the left for easy reading
         return list(reversed(new_qs))
 
-class Second_Timer:
+class SecondTimer:
     def __init__(self):
-        self.decade_counter_6 = Decade_Counter_6()
-        self.decade_counter_10 = Decade_Counter_10()
+        self.decade_counter_6 = Counter0_5()
+        self.decade_counter_10 = Counter0_9()
         self.nand_gate = NAND()
 
     def getBitsOfLow(self):
@@ -128,10 +128,10 @@ class Second_Timer:
         bits_of_digit6 = self.decade_counter_6(clk_of_digit6)
         return bits_of_digit6, bits_of_digit10
 
-class Minute_Timer:
+class MinuteTimer:
     def __init__(self):
-        self.decade_counter_6 = Decade_Counter_6()
-        self.decade_counter_10 = Decade_Counter_10()
+        self.decade_counter_6 = Counter0_5()
+        self.decade_counter_10 = Counter0_9()
         self.nand_gate = NAND()
 
     def getBitsOfLow(self):
@@ -148,10 +148,10 @@ class Minute_Timer:
         bits_of_digit6 = self.decade_counter_6(clk_of_digit6)
         return bits_of_digit6, bits_of_digit10
 
-class Hour_Timer:
+class HourTimer:
     def __init__(self):
         self.nbits = 5        
-        self.flipflops = [Edge_Triggered_D_Flip_Flop_V2() for _ in range(self.nbits)]
+        self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
                 
         self.nand_gate = NAND()
         self.and_gate_10 = AND(2) # Detects the 10
@@ -210,18 +210,18 @@ class Hour_Timer:
         # Return with MSB on the left for easy reading
         return list(reversed(new_qs))
 
-class Hour_Minute_Second_Timer_V2:
+class HourMinuteSecondTimer:
     # adding switches to set the time manually(hour and minute and second)
     def __init__(self):
-        self.hour_timer = Hour_Timer()
-        self.minute_timer = Minute_Timer()
-        self.second_timer = Second_Timer()
+        self.hour_timer = HourTimer()
+        self.minute_timer = MinuteTimer()
+        self.second_timer = SecondTimer()
         self.nand_gate_min_sec = NAND()
         
         self.nand_gate_hour_min = NAND()
         self.nand_gate_pm_am = NAND()
         # A toggle flip-flop to store AM (0) or PM (1)
-        self.am_pm_memory = Edge_Triggered_D_Flip_Flop_V2()
+        self.am_pm_memory = EdgeTriggeredDTypeFlipFlopWithPresetAndClear()
 
         self.switch_sec = XOR()
         self.switch_min = XOR()
