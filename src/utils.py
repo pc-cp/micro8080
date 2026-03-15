@@ -920,7 +920,7 @@ class NBitsMemory:
         # data[-1] is the LSB, data[0] is the MSB
         for i in reversed(range(self.n_bits)):
             self.latches[i]([data[i], write_enable])  # D = data[i], CLK = write_enable
-        return self.read()
+        # return self.read()
 
     def read(self):
         bits = [bit.getQ() for bit in self.latches]
@@ -1008,13 +1008,12 @@ class RAM_8_1:
         write_lines = self.decoder(address, write)
         for i in range(self.capacity):
             self.memory_cells[i](data_in, write_lines[i])  # Write data to the selected memory cell
-        return self.read(address)
+        # return self.read(address)
 
     def read(self, address):
         # Read from all memory cells and use the selector to get the output from the selected cell
         out_from_memory = [cell.read()[0] for cell in self.memory_cells]  # Get the output from all memory cells
         return self.selector(address, out_from_memory)  # Select the output from the addressed cell
-
 
 class RAM_8_8:
     """
@@ -1033,14 +1032,14 @@ class RAM_8_8:
 
         for bit in range(self.word_size):
             self.ram_8_1_cells[bit](address, [data_in[bit]], write)  # Write each bit to the selected memory cell
-        return self.read(address)
+        # return self.read(address)
 
     def read(self, address):
         bits = []
         for bit in range(self.word_size):
             bits = bits + self.ram_8_1_cells[bit].read(address)
         return bits
-    
+
 class Decoder_4_16:
     """
     4 to 16 decoder, takes 4 input bits and decodes them into 16 output lines.
@@ -1172,7 +1171,7 @@ class RAM_16_1:
 
         for i in range(self.capacity):
             self.memory_cells[i](data_in, write_lines[i])  # Write data to the selected memory cell
-        return self.read(address)
+        # return self.read(address)
 
     def read(self, address):
         # Read from all memory cells and use the selector to get the output from the selected cell
@@ -1196,14 +1195,13 @@ class RAM_16_8:
 
         for bit in range(self.word_size):
             self.ram_16_1_cells[bit](address, [data_in[bit]], write)  # Write each bit to the selected memory cell
-        return self.read(address)
+        # return self.read(address)
 
     def read(self, address):
         bits = []
         for bit in range(self.word_size):
             bits = bits + self.ram_16_1_cells[bit].read(address)
         return bits
-
 
 
 class RAM_64KB:
@@ -1230,38 +1228,53 @@ class RAM_64KB:
         out0 = self.decoder0(address[:4])
         out1 = self.decoder1(address[4:8])
         out2 = self.decoder2(address[8:12])
-        for i, val0 in enumerate(out0):
-            if val0 == 0: continue # software magic: skip dead wires to save time.
-            for j, val1 in enumerate(out1):
-                if val1 == 0: continue
-                for k, val2 in enumerate(out2):
-                    if val2 == 0: continue
-                    # if val0, val1, and val2 are all 1, we found the active chip
-                    idx = (i << 8) | (j << 4) | k
-                    # the write signal is passed directly into the smaller chip1
-                    self.ram_16_8_cells[idx](address[12:], data_in, write)
+        idx0 = [i for i, val in enumerate(reversed(out0)) if val == 1]
+        idx1 = [i for i, val in enumerate(reversed(out1)) if val == 1]
+        idx2 = [i for i, val in enumerate(reversed(out2)) if val == 1]
+        assert len(idx0) == 1 and len(idx1) == 1 and len(idx2) == 1, "Decoder error: Multiple lines active!"
+        idx = (idx0[0] << 8) | (idx1[0] << 4) | idx2[0]
+        self.ram_16_8_cells[idx](address[12:], data_in, write)
+
+        # below in loop, very slow
+        # for i, val0 in enumerate(reversed(out0)):
+        #     if val0 == 0: continue # software magic: skip dead wires to save time.
+        #     for j, val1 in enumerate(reversed(out1)):
+        #         if val1 == 0: continue
+        #         for k, val2 in enumerate(reversed(out2)):
+        #             if val2 == 0: continue
+        #             # if val0, val1, and val2 are all 1, we found the active chip
+        #             idx = (i << 8) | (j << 4) | k
+        #             # the write signal is passed directly into the smaller chip1
+        #             self.ram_16_8_cells[idx](address[12:], data_in, write)
         
-        return self.read(address)
+        # return self.read(address)
 
     def read(self, address):
         out0 = self.decoder0(address[:4])
         out1 = self.decoder1(address[4:8])
         out2 = self.decoder2(address[8:12])
-        for i, val0 in enumerate(out0):
-            if val0 == 0: continue # software magic: skip dead wires to save time.
-            for j, val1 in enumerate(out1):
-                if val1 == 0: continue
-                for k, val2 in enumerate(out2):
-                    if val2 == 0: continue
-                    """
-                    page 281 of the book, read need [enable] pin, but 
-                    here we needn't, because we use if condition to check
-                    idx is our active chip.
-                    """
-                    # if val0, val1, and val2 are all 1, we found the active chip
-                    idx = (i << 8) | (j << 4) | k
-                    # the write signal is passed directly into the smaller chip1
-                    outputs = self.ram_16_8_cells[idx].read(address[12:])
+        idx0 = [i for i, val in enumerate(reversed(out0)) if val == 1]
+        idx1 = [i for i, val in enumerate(reversed(out1)) if val == 1]
+        idx2 = [i for i, val in enumerate(reversed(out2)) if val == 1]
+        assert len(idx0) == 1 and len(idx1) == 1 and len(idx2) == 1, "Decoder error: Multiple lines active!"
+        idx = (idx0[0] << 8) | (idx1[0] << 4) | idx2[0]
+        outputs = self.ram_16_8_cells[idx].read(address[12:])
+
+        # for i, val0 in enumerate(reversed(out0)):
+        #     if val0 == 0: continue # software magic: skip dead wires to save time.
+        #     for j, val1 in enumerate(reversed(out1)):
+        #         if val1 == 0: continue
+        #         for k, val2 in enumerate(reversed(out2)):
+        #             if val2 == 0: continue
+        #             """
+        #             page 281 of the book, read need [enable] pin, but 
+        #             here we needn't, because we use if condition to check
+        #             idx is our active chip.
+        #             """
+        #             # if val0, val1, and val2 are all 1, we found the active chip
+        #             idx = (i << 8) | (j << 4) | k
+        #             # the write signal is passed directly into the smaller chip1
+        #             outputs = self.ram_16_8_cells[idx].read(address[12:])
         return outputs
     
     
