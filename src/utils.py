@@ -904,3 +904,364 @@ class HourMinuteSecondTimer:
         am_pm_q, _ = self.am_pm_memory([current_am_pm_state, clk_of_am_pm, 0, 0])
         
         return am_pm_q, bits_tens_hour, bits_ones_hour, bits_tens_min, bits_ones_min, bits_tens_sec, bits_ones_sec
+
+
+class NBitsMemory:
+    """
+    one time store nbits data, not flexible but simple to implement.
+    """
+    def __init__(self, n_bits):
+        self.n_bits = n_bits
+        self.latches = [LevelTriggeredDTypeFlipFlopWithClear() for _ in range(n_bits)]
+    
+    def __call__(self, data, write_enable):
+        assert len(data) == self.n_bits, f"Data bus must be {self.n_bits} bits long"
+        assert write_enable in [0, 1], f"Write enable must be 0 or 1"
+        # data[-1] is the LSB, data[0] is the MSB
+        for i in reversed(range(self.n_bits)):
+            self.latches[i]([data[i], write_enable])  # D = data[i], CLK = write_enable
+        return self.read()
+
+    def read(self):
+        bits = [bit.getQ() for bit in self.latches]
+        return bits # return MSB first, LSB last
+    
+class Decoder_3_8:
+    """
+    3 to 8 decoder, takes 3 input bits and decodes them into 8 output lines.
+    Only one output line will be high (1) at a time
+    for example, if the input is 101, then the output will be 00100000
+    """
+    def __init__(self, nin = 3, nout = 8):
+        self.nin = nin
+        self.nout = nout
+        self.inverters = [Inverter() for _ in range(self.nin)]
+        self.and_gates = [AND(4) for _ in range(self.nout)]
+    
+    def __call__(self, address, write):
+        assert len(address) == self.nin, "Input must be 3 bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+
+        address = [[address[i]] for i in range(len(address))] # convert to list of lists for inverters gate input
+
+        output = [0] * self.nout
+        output[7] = self.and_gates[0]([write, self.inverters[2](address[2]), self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1000
+        output[6] = self.and_gates[1]([write, self.inverters[2](address[2]), self.inverters[1](address[1]), address[0][0]]) # 1001
+        output[5] = self.and_gates[2]([write, self.inverters[2](address[2]), address[1][0], self.inverters[0](address[0])]) # 1010
+        output[4] = self.and_gates[3]([write, self.inverters[2](address[2]), address[1][0], address[0][0]]) # 1011
+        output[3] = self.and_gates[4]([write, address[2][0], self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1100
+        output[2] = self.and_gates[5]([write, address[2][0], self.inverters[1](address[1]), address[0][0]]) # 1101
+        output[1] = self.and_gates[6]([write, address[2][0], address[1][0], self.inverters[0](address[0])]) # 1110
+        output[0] = self.and_gates[7]([write, address[2][0], address[1][0], address[0][0]]) # 1111
+        # output[0] is MSB
+        return output
+
+class Selector_8_1:
+    """
+    8 to 1 selector, takes 8 input lines and selects one of them based on a 3-bit address.
+    for example, if the address is 101, then the output will be the value of the 00100000 -> output[2] out_from_memory line
+    """
+    def __init__(self, nin = 3, nout = 8):
+        self.nin = nin
+        self.nout = nout
+        self.inverters = [Inverter() for _ in range(self.nin)]
+        self.and_gates = [AND(4) for _ in range(self.nout)]
+        self.or_gate = OR(self.nout)
+
+    def __call__(self, address, out_from_memory):
+        assert len(address) == self.nin, f"Input must be {self.nin} bits long"
+        assert len(out_from_memory) == self.nout, f"Out_from_memory must be {self.out} bits long"
+        address = [[address[i]] for i in range(len(address))] # convert to list of lists for inverters gate input
+
+        output = [0] * self.nout
+        output[7] = self.and_gates[0]([out_from_memory[7], self.inverters[2](address[2]), self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1000
+        output[6] = self.and_gates[1]([out_from_memory[6], self.inverters[2](address[2]), self.inverters[1](address[1]), address[0][0]]) # 1001
+        output[5] = self.and_gates[2]([out_from_memory[5], self.inverters[2](address[2]), address[1][0], self.inverters[0](address[0])]) # 1010
+        output[4] = self.and_gates[3]([out_from_memory[4], self.inverters[2](address[2]), address[1][0], address[0][0]]) # 1011
+        output[3] = self.and_gates[4]([out_from_memory[3], address[2][0], self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1100
+        output[2] = self.and_gates[5]([out_from_memory[2], address[2][0], self.inverters[1](address[1]), address[0][0]]) # 1101
+        output[1] = self.and_gates[6]([out_from_memory[1], address[2][0], address[1][0], self.inverters[0](address[0])]) # 1110
+        output[0] = self.and_gates[7]([out_from_memory[0], address[2][0], address[1][0], address[0][0]]) # 1111
+        out = self.or_gate(output)
+        return [out]
+    
+
+class RAM_8_1:
+    """
+    A simple memory module that combines the decoder, memory cells, and selector to create a functional memory unit.
+    For simplicity, we will implement a 8-word memory with 3-bit addresses and 1-bit data.
+    """
+    def __init__(self):
+        self.capacity = 8  # 8 words
+        self.word_size = 1  # 1 bit per word
+
+        self.decoder = Decoder_3_8()
+        self.memory_cells = [NBitsMemory(self.word_size) for _ in range(self.capacity)]  # 8 words of 1 bit each
+        self.selector = Selector_8_1()
+
+    def __call__(self, address, data_in, write):
+        assert len(address) == 3, "Address must be 3 bits long"
+        assert len(data_in) == self.word_size, f"Data input must be {self.word_size} bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+        
+        # Use the decoder to determine which memory cell to write to
+        write_lines = self.decoder(address, write)
+        for i in range(self.capacity):
+            self.memory_cells[i](data_in, write_lines[i])  # Write data to the selected memory cell
+        return self.read(address)
+
+    def read(self, address):
+        # Read from all memory cells and use the selector to get the output from the selected cell
+        out_from_memory = [cell.read()[0] for cell in self.memory_cells]  # Get the output from all memory cells
+        return self.selector(address, out_from_memory)  # Select the output from the addressed cell
+
+
+class RAM_8_8:
+    """
+    A simple memory module that combines the decoder, memory cells, and selector to create a functional memory unit.
+    For simplicity, we will implement a 8-word memory with 3-bit addresses and 8-bit data.
+    """
+    def __init__(self, word_size=8):
+        self.capacity = 8  # 8 words
+        self.word_size = word_size
+        self.ram_8_1_cells = [RAM_8_1() for _ in range(self.word_size)]  # 8 words of 8 bits each
+        
+    def __call__(self, address, data_in, write):
+        assert len(address) == 3, "Address must be 3 bits long"
+        assert len(data_in) == self.word_size, f"Data input must be {self.word_size} bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+
+        for bit in range(self.word_size):
+            self.ram_8_1_cells[bit](address, [data_in[bit]], write)  # Write each bit to the selected memory cell
+        return self.read(address)
+
+    def read(self, address):
+        bits = []
+        for bit in range(self.word_size):
+            bits = bits + self.ram_8_1_cells[bit].read(address)
+        return bits
+    
+class Decoder_4_16:
+    """
+    4 to 16 decoder, takes 4 input bits and decodes them into 16 output lines.
+    Only one output line will be high (1) at a time
+    for example, if the input is 1010, then the output will be 0000010000000000
+    """
+    def __init__(self, nin = 4, nout = 16):
+        self.nin = nin
+        self.nout = nout
+        self.inverters = [Inverter() for _ in range(self.nin)]
+        self.and_gates = [AND(4) for _ in range(self.nout)]
+        self.and_gates_with_write = [AND(2) for _ in range(self.nout)]
+    
+    def write(self, inputs, write):
+        assert len(inputs) == self.nout, f"Inputs must be {self.nout} bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+        # This function will take the write signal and the inputs, and return the output of the AND gate
+        outputs = []
+        for i in range(self.nout):
+            outputs.append(self.and_gates_with_write[i]([write, inputs[i]]))
+        return outputs
+
+    def __call__(self, address):
+        assert len(address) == self.nin, "Input must be 4 bits long"
+        idxs = [
+            [0, 0, 0, 0], 
+            [0, 0, 0, 1], 
+            [0, 0, 1, 0], 
+            [0, 0, 1, 1], 
+            [0, 1, 0, 0], 
+            [0, 1, 0, 1], 
+            [0, 1, 1, 0], 
+            [0, 1, 1, 1], 
+            [1, 0, 0, 0], 
+            [1, 0, 0, 1], 
+            [1, 0, 1, 0], 
+            [1, 0, 1, 1], 
+            [1, 1, 0, 0], 
+            [1, 1, 0, 1], 
+            [1, 1, 1, 0], 
+            [1, 1, 1, 1]
+        ]
+        address = [[address[i]] for i in range(len(address))] # convert to list of lists for inverters gate input
+        output = [0] * self.nout
+        # like Decoder_3_8, but just use loop instead of hardcoding each line
+        for i, idx in enumerate(idxs):
+            # print(f"Address: {idx} -> Output Line: {15 - i}")
+            input_and = []
+            for j, val in enumerate(idx):
+                if val == 0:
+                    input_and.append(self.inverters[j](address[j]))
+                else:
+                    input_and.append(address[j][0])
+            # output[self.nout - 1 - i] = self.and_gates[i]([write] + input_and)  # write is the first input to the AND gate
+            output[self.nout - 1 - i] = self.and_gates[i](input_and)
+        # output[0] is MSB
+        return output
+
+class Selector_16_1:
+    """
+    16 to 1 selector, takes 16 input lines and selects one of them based on a 16-bit address.
+    for example, if the address is 1010, then the output will be the value of the 0000010000000000 -> output[5] out_from_memory line
+    """
+    def __init__(self, nin = 4, nout = 16):
+        self.nin = nin
+        self.nout = nout
+        self.inverters = [Inverter() for _ in range(self.nin)]
+        self.and_gates = [AND(5) for _ in range(self.nout)]
+        self.or_gate = OR(self.nout)
+
+    def __call__(self, address, out_from_memory):
+        assert len(address) == self.nin, f"Input must be {self.nin} bits long"
+        assert len(out_from_memory) == self.nout, f"Out_from_memory must be {self.nout} bits long"
+        idxs = [
+            [0, 0, 0, 0], 
+            [0, 0, 0, 1], 
+            [0, 0, 1, 0], 
+            [0, 0, 1, 1], 
+            [0, 1, 0, 0], 
+            [0, 1, 0, 1], 
+            [0, 1, 1, 0], 
+            [0, 1, 1, 1], 
+            [1, 0, 0, 0], 
+            [1, 0, 0, 1], 
+            [1, 0, 1, 0], 
+            [1, 0, 1, 1], 
+            [1, 1, 0, 0], 
+            [1, 1, 0, 1], 
+            [1, 1, 1, 0], 
+            [1, 1, 1, 1]
+        ]
+        address = [[address[i]] for i in range(len(address))] # convert to list of lists for inverters gate input
+        output = [0] * self.nout
+        # like Decoder_3_8, but just use loop instead of hardcoding each line
+        for i, idx in enumerate(idxs):
+            # print(f"Address: {idx} -> Output Line: {15 - i}")
+            input_and = []
+            for j, val in enumerate(idx):
+                if val == 0:
+                    input_and.append(self.inverters[j](address[j]))
+                else:
+                    input_and.append(address[j][0])
+            output[self.nout - 1 - i] = self.and_gates[i]([out_from_memory[self.nout - 1 - i]] + input_and)  # write is the first input to the AND gate
+        out = self.or_gate(output)
+        return [out]
+    
+
+class RAM_16_1:
+    """
+    A simple memory module that combines the decoder, memory cells, and selector to create a functional memory unit.
+    For simplicity, we will implement a 16-word memory with 4-bit addresses and 1-bit data.
+    """
+    def __init__(self):
+        self.capacity = 16  # 8 words
+        self.word_size = 1  # 1 bit per word
+
+        self.decoder = Decoder_4_16()
+        self.memory_cells = [NBitsMemory(self.word_size) for _ in range(self.capacity)]  # 8 words of 1 bit each
+        self.selector = Selector_16_1()
+
+    def __call__(self, address, data_in, write):
+        assert len(address) == 4, "Address must be 4 bits long"
+        assert len(data_in) == self.word_size, f"Data input must be {self.word_size} bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+        
+        # Use the decoder to determine which memory cell to write to
+        write_lines = self.decoder(address)
+        write_lines = self.decoder.write(write_lines, write)
+
+        for i in range(self.capacity):
+            self.memory_cells[i](data_in, write_lines[i])  # Write data to the selected memory cell
+        return self.read(address)
+
+    def read(self, address):
+        # Read from all memory cells and use the selector to get the output from the selected cell
+        out_from_memory = [cell.read()[0] for cell in self.memory_cells]  # Get the output from all memory cells
+        return self.selector(address, out_from_memory)  # Select the output from the addressed cell
+
+class RAM_16_8:
+    """
+    A simple memory module that combines the decoder, memory cells, and selector to create a functional memory unit.
+    For simplicity, we will implement a 16-word memory with 4-bit addresses and 8-bit data.
+    """
+    def __init__(self, word_size=8):
+        self.capacity = 16  # 16 words
+        self.word_size = word_size
+        self.ram_16_1_cells = [RAM_16_1() for _ in range(self.word_size)]  # 16 words of 8 bits each
+        
+    def __call__(self, address, data_in, write):
+        assert len(address) == 4, "Address must be 4 bits long"
+        assert len(data_in) == self.word_size, f"Data input must be {self.word_size} bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+
+        for bit in range(self.word_size):
+            self.ram_16_1_cells[bit](address, [data_in[bit]], write)  # Write each bit to the selected memory cell
+        return self.read(address)
+
+    def read(self, address):
+        bits = []
+        for bit in range(self.word_size):
+            bits = bits + self.ram_16_1_cells[bit].read(address)
+        return bits
+
+
+
+class RAM_64KB:
+    """
+    64KB Memory using 16-bit address bus.
+    Address are split:
+        - Top 12 bits route to one of 4,096 RAM_16_8 chips.
+        - Bottom 4 bits select the exact byte within that chip.
+    """
+    def __init__(self, word_size=8):
+        self.capacity = 65536  # 64KB = 65536 bytes
+        self.word_size = word_size
+        self.ram_16_8_cells = [RAM_16_8() for _ in range(self.capacity // 16)]  # Each RAM_16_8 can handle 16 addresses
+        self.decoder0 = Decoder_4_16()  # To select which RAM_16_8 to use based on the address[0:4]
+        self.decoder1 = Decoder_4_16()  # To select which RAM_16_8 to use based on the address[4:8]
+        self.decoder2 = Decoder_4_16()  # To select which RAM_16_8 to use based on the address[8:12]
+
+    def __call__(self, address, data_in, write):
+        assert len(address) == 16, "Address must be 16 bits long"
+        assert len(data_in) == self.word_size, f"Data input must be {self.word_size} bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+
+        # 1. Decode the top 12 bits to find the active RAM_16_8 chip
+        out0 = self.decoder0(address[:4])
+        out1 = self.decoder1(address[4:8])
+        out2 = self.decoder2(address[8:12])
+        for i, val0 in enumerate(out0):
+            if val0 == 0: continue # software magic: skip dead wires to save time.
+            for j, val1 in enumerate(out1):
+                if val1 == 0: continue
+                for k, val2 in enumerate(out2):
+                    if val2 == 0: continue
+                    # if val0, val1, and val2 are all 1, we found the active chip
+                    idx = (i << 8) | (j << 4) | k
+                    # the write signal is passed directly into the smaller chip1
+                    self.ram_16_8_cells[idx](address[12:], data_in, write)
+        
+        return self.read(address)
+
+    def read(self, address):
+        out0 = self.decoder0(address[:4])
+        out1 = self.decoder1(address[4:8])
+        out2 = self.decoder2(address[8:12])
+        for i, val0 in enumerate(out0):
+            if val0 == 0: continue # software magic: skip dead wires to save time.
+            for j, val1 in enumerate(out1):
+                if val1 == 0: continue
+                for k, val2 in enumerate(out2):
+                    if val2 == 0: continue
+                    """
+                    page 281 of the book, read need [enable] pin, but 
+                    here we needn't, because we use if condition to check
+                    idx is our active chip.
+                    """
+                    # if val0, val1, and val2 are all 1, we found the active chip
+                    idx = (i << 8) | (j << 4) | k
+                    # the write signal is passed directly into the smaller chip1
+                    outputs = self.ram_16_8_cells[idx].read(address[12:])
+        return outputs
+    
+    
