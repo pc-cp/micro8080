@@ -193,11 +193,11 @@ def test_edge_triggered_d_type_flip_flop_with_preset_and_clear():
     assert my_flipflop.getQ() == 1 and my_flipflop.getQ_bar() == 0, "Hold should maintain previous state of q=1 and q_bar=0"
 
     # Test D=0, CLK rising edge, PRE=0, CLR=0 (capture)
-    my_flipflop([0, 1, 0, 0]) # D = 1, CLK = 1, PRE = 0, CLR = 0
+    my_flipflop([0, 1, 0, 0]) # D = 0, CLK = 1, PRE = 0, CLR = 0
     assert my_flipflop.getQ() == 0 and my_flipflop.getQ_bar() == 1, "Capture should set q to D (0) and q_bar to inverse (1)"
     
     # Test D=0, CLK rising edge, PRE=1, CLR=0 (capture)
-    my_flipflop([0, 1, 1, 0]) # D = 1, CLK = 1, PRE = 1, CLR = 0
+    my_flipflop([0, 1, 1, 0]) # D = 0, CLK = 1, PRE = 1, CLR = 0
     assert my_flipflop.getQ() == 1 and my_flipflop.getQ_bar() == 0, "Preset should set q to 1 and q_bar to 0 regardless of D and CLK"
     
     # Test D=0, CLK falling edge, PRE=0, CLR=0 (hold)
@@ -219,6 +219,11 @@ def test_edge_triggered_d_type_flip_flop_with_preset_and_clear():
     # Test D=1, CLK rising edge, PRE=0, CLR=0 (Capture)
     my_flipflop([1, 1, 0, 0]) # D = 1, CLK = 1, PRE = 0, CLR = 0
     assert my_flipflop.getQ() == 1 and my_flipflop.getQ_bar() == 0, "Capture should set q to D (1) and q_bar to inverse (0)"
+
+    # Test D=0, CLK=0, PRE=1, CLR=0
+    my_flipflop([0, 0, 1, 0]) # D = 0, CLK = 0, PRE = 1, CLR = 0
+    assert my_flipflop.getQ() == 1 and my_flipflop.getQ_bar() == 0, "Preset should set q to 1 and q_bar to 0 regardless of D and CLK"
+    
 
 def test_nbits_edge_triggered_d_type_flip_flop_with_preset_and_clear():
     nbits = 4

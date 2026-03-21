@@ -217,6 +217,8 @@ class NBitAdderWithOverflow:
         
         self.or_gate = OR(nin=2)
         
+        self.carry_out = -1
+
     def __call__(self, x, y, last_carry_in=0):
         assert len(x) == self.nbits and len(y) == self.nbits, f"Inputs must be {self.nbits} bits long"
         final_sums = []
@@ -234,6 +236,7 @@ class NBitAdderWithOverflow:
             final_carrys = carry_out
             final_sums = [sum_out] + final_sums
         # The final carry out of the MSB is still sitting at index 0
+        self.carry_out = final_carrys
 
         # we return third result that reflect overflow use two-complement
         invert_msb_of_final_sum = self.inverter([final_sums[0]])
@@ -245,6 +248,9 @@ class NBitAdderWithOverflow:
         overflow = self.or_gate([out_of_and_gate, out_of_nor_gate])
         
         return overflow, final_sums
+    
+    def get_carry_out(self):
+        return self.carry_out
 
 # from ch17 flip-flop
 
@@ -943,7 +949,8 @@ class Decoder_3_8:
         assert write in [0, 1], "Write signal must be 0 or 1"
 
         address = [[address[i]] for i in range(len(address))] # convert to list of lists for inverters gate input
-
+        # TODO(PengChen:) this have potential bug, logcial error, address = [0,0,1] -> output[3] is 1
+        # but should out[6] is 1.
         output = [0] * self.nout
         output[7] = self.and_gates[0]([write, self.inverters[2](address[2]), self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1000
         output[6] = self.and_gates[1]([write, self.inverters[2](address[2]), self.inverters[1](address[1]), address[0][0]]) # 1001
