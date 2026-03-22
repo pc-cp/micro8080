@@ -1284,4 +1284,324 @@ class RAM_64KB:
         #             outputs = self.ram_16_8_cells[idx].read(address[12:])
         return outputs
     
+class ControlSignals:
+    def __init__(self):
+        self.edge_flipflop1 = EdgeTriggeredDTypeFlipFlopWithPresetAndClear()
+        self.edge_flipflop2 = EdgeTriggeredDTypeFlipFlopWithPresetAndClear()
+        self.invert1 = Inverter()
+        self.and_gate = AND()
+    def __call__(self, clock):
+        not_clk = self.invert1([clock])
+
+        # while True:
+        #     old_q1, old_q_bar1 = self.edge_flipflop1.getQ(), self.edge_flipflop1.getQ_bar()
+        #     old_q2, old_q_bar2 = self.edge_flipflop2.getQ(), self.edge_flipflop2.getQ_bar()
+
+        self.edge_flipflop1([self.edge_flipflop1.getQ_bar(), clock])
+        self.edge_flipflop2([self.edge_flipflop1.getQ(), not_clk])
+        clk_input_to_counter = self.edge_flipflop1.getQ()
+        pulse = self.and_gate([self.edge_flipflop1.getQ_bar(), self.edge_flipflop2.getQ()])
+        return [clk_input_to_counter, pulse]
+    
+
+
+class Counter16Bit:
+    """A Ripple Counter that counts"""
+    def __init__(self,):
+        self.nbits = 16
+        self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
+        self.and_gate = AND()
+
+    def getQs(self):
+        qs = [ff.getQ() for ff in self.flipflops]
+        return list(reversed(qs))
+    
+    def SetMaxAddr(self):
+        for ff in self.flipflops:
+            ff([0, 0, 1, 0]) # D = 0, CLK = 0, PRE = 1, CLR = 0
+
+    def __call__(self, clk = 0, clear_wire = 0):
+        # The hardware stabilization loop
+        while True:
+            # 1. Take a snapshot of the current state of the ff
+            old_qs = [ff.getQ() for ff in self.flipflops]
+
+            # 2. Wire up the Async Clear
+            # ff[0] is Q0 (LSB), ff[1] is Q1, ff[2] is Q2, ff[3] is Q3 (MSB)
+            # We want to clear when we hit 10 (Binary: 1010). 
+            # This happens when Q3 == 1 and Q1 == 1.
+            # q1 = self.flipflops[1].getQ()
+            # q3 = self.flipflops[3].getQ()
+            # clear_wire = self.and_gate([q3, q1])
+
+            # 3. Propagate the clock and data through the ripple chain
+            current_clk = clk
+            for ff in self.flipflops:
+                data = ff.getQ_bar()
+                # Pass Data, Clock, Preset(0), and clear wire (0)
+                q, q_bar = ff([data, current_clk, 0, clear_wire])
+                current_clk = q_bar
+
+            # 4. Read the new state
+            new_qs = [ff.getQ() for ff in self.flipflops]
+
+            # 5. If the electrons have settled and nothing changed, break!
+            if old_qs == new_qs:
+                break
+
+        # Return with MSB on the left for easy reading
+        return list(reversed(new_qs))
+    
+class AutomatedAccumulatingAdder:
+    """
+    A class representing an automated accumulating adder.
+    """
+    def __init__(self, nbits = 8):
+        self.nbits = nbits
+        self.counter = Counter16Bit()  # Using the 16-bit counter as an accumulator
+        # self.control_signals = ControlSignals()
+        self.ram64KB = RAM_64KB()
+
+        # NBitsAccumulator
+        self.adder = NBitAdderWithOverflow(self.nbits)
+        self.register = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+
+        self.nor_gate = NOR(self.nbits) # for RAM Write signal
+        self.and_gate = AND(2)
+
+    def SetMaxAddr(self):
+        self.counter.SetMaxAddr()
+
+    def __call__(self, clk_input_to_counter, pulse):
+        # clk_input_to_counter, pulse = self.control_signals(clock)
+        self.counter(clk_input_to_counter)
+        addr = self.counter.getQs()
+        data_out_from_memory = self.ram64KB.read(addr)
+        overflow, sum_bits = self.adder(data_out_from_memory, self.register.getQ())
+        self.register(sum_bits, pulse)  # Data, Clock, Preset(0), Clear(0)
+
+        # from page 297 in book, author
+        # wants to write the accumulated sum to the first memory
+        # location that has a value of 00h.
+        ram_write = self.and_gate([self.nor_gate(data_out_from_memory), pulse])
+        if ram_write:
+            self.write_to_memory(addr, self.register.getQ())
+
+    def write_to_memory(self, address, data):
+        self.ram64KB(address, data, write=1)
+
+    def read_register(self):
+        return self.register.getQ()        
+    
+
+
+class Decoder_2_4:
+    """
+    2 to 4 decoder, takes 2 input bits and decodes them into 4 output lines.
+    Only one output line will be high (1) at a time
+    for example, if the input is 01, then the output will be 0010
+    """
+    def __init__(self, nin = 2, nout = 4):
+        self.nin = nin
+        self.nout = nout
+        self.inverters = [Inverter() for _ in range(self.nin)]
+        self.and_gates = [AND(2) for _ in range(self.nout)]
+        self.and_gates_with_write = [AND(2) for _ in range(self.nout)]
+    
+    def write(self, inputs, write):
+        assert len(inputs) == self.nout, f"Inputs must be {self.nout} bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+        # This function will take the write signal and the inputs, and return the output of the AND gate
+        outputs = []
+        for i in range(self.nout):
+            outputs.append(self.and_gates_with_write[i]([write, inputs[i]]))
+        return outputs
+
+    def __call__(self, address):
+        assert len(address) == self.nin, "Input must be 2 bits long"
+        idxs = [
+            [0, 0], 
+            [0, 1], 
+            [1, 0], 
+            [1, 1], 
+        ]
+        address = [[address[i]] for i in range(len(address))] # convert to list of lists for inverters gate input
+        output = [0] * self.nout
+        for i, idx in enumerate(idxs):
+            input_and = []
+            for j, val in enumerate(idx):
+                if val == 0:
+                    input_and.append(self.inverters[j](address[j]))
+                else:
+                    input_and.append(address[j][0])
+            output[self.nout - 1 - i] = self.and_gates[i](input_and)
+        # output[0] is MSB
+        return output
+    
+class AutomatedAccumulatingAdderV2:
+    """
+    A class representing an automated accumulating adder.
+    """
+    def __init__(self, nbits = 8):
+        self.nbits = nbits
+        self.counter = Counter16Bit()  # Using the 16-bit counter as an accumulator
+        # self.control_signals = ControlSignals()
+        self.ram64KB = RAM_64KB()
+
+        # NBitsAccumulator
+        self.adder = NBitAdderWithOverflow(self.nbits)
+
+        self.inst_latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+
+        self.low_latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits+1)    # overflow of low
+        self.middle_latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits+1) # overflow of middle
+        self.high_latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)   
+
+        self.decoder_2_4_for_clock = Decoder_2_4()
+        self.and_gate_use_for_instruct_clk = AND()
+        self.and_gate_use_for_low_byte_clk = AND(3)
+        self.and_gate_use_for_middle_byte_clk = AND(3)
+        self.and_gate_use_for_high_byte_clk = AND(3)
+
+        self.xor_gates_for_complements = [XOR() for _ in range(self.nbits)]
+        
+        self.and_gate_for_carry_in_adder = AND()
+        self.or_gate_for_carry_in_adder = OR()
+
+        self.invert_for_write_ram = Inverter()
+        self.and_gate_for_write_ram = AND(3)
+
+        self.enable_low_byte = -1
+        self.enable_mid_byte = -1
+        self.enable_hig_byte = -1
+
+        self.carry_in_adder = -1
+        self.input_a = [-1] * self.nbits
+
+        self.enable_instruct = -1
+
+        self.halt_instruct = -1
+        # self.invert_gate_for_halt = Inverter()
+
+
+    def SetMaxAddr(self):
+        self.counter.SetMaxAddr()
+
+    def getEnableLow(self):
+        return self.enable_low_byte
+    
+    def getEnableMiddle(self):
+        return self.enable_mid_byte
+    
+    def getEnableHigh(self):
+        return self.enable_hig_byte
+    
+    def getHaltInst(self):
+        return self.halt_instruct
+    
+    def getCarryInAdder(self):
+        return self.carry_in_adder
+
+    def getInputA(self):
+        return self.input_a
+    
+    def getInputA(self):
+        return self.input_a
+
+    def getEnableInstruc(self):
+        return self.enable_instruct
+
+    def __call__(self, clk_input_to_counter, pulse):
+        # clk_input_to_counter, pulse = self.control_signals(clock)
+        self.counter(clk_input_to_counter)
+        addr = self.counter.getQs()
+        # instruct code or data
+        data_out_from_memory = self.ram64KB.read(addr)
+
+        # page 305: The three enable signals for the tri-state buffers can be 
+        # generated by a 2-to-4 decoder using least significant bits of the memory address.
+        enable_high_byte, enable_middle_byte, enable_low_byte, enable_insruct = self.decoder_2_4_for_clock([addr[-2], addr[-1]])
+
+        self.enable_instruct = enable_insruct
+        self.enable_low_byte = enable_low_byte
+        self.enable_mid_byte = enable_middle_byte
+        self.enable_hig_byte = enable_high_byte
+
+        instruction_latch_clk = self.and_gate_use_for_instruct_clk([enable_insruct, pulse])
+        self.inst_latch(data_out_from_memory, instruction_latch_clk)  # Code, Clock, Preset(0), Clear(0)
+        Q_from_inst_latch = self.inst_latch.getQ()
+
+        if pulse:
+            print(f"Q_from_inst_latch: {Q_from_inst_latch}")
+
+        # to halt
+        Q3_from_inst_latch = Q_from_inst_latch[-4]
+        self.halt_instruct = Q3_from_inst_latch
+        # page 311 use invert Q3 to config flip-flip, we not use here for simple.
+        # self.halt_instruct = self.invert_gate_for_halt([Q3_from_inst_latch])
+
+        Q1_from_inst_latch = Q_from_inst_latch[-2]
+
+        low_byte_latch_clk = self.and_gate_use_for_low_byte_clk([Q1_from_inst_latch, pulse, enable_low_byte])
+        mid_byte_latch_clk = self.and_gate_use_for_middle_byte_clk([Q1_from_inst_latch, pulse, enable_middle_byte])
+        high_byte_latch_clk = self.and_gate_use_for_high_byte_clk([Q1_from_inst_latch, pulse, enable_high_byte])
+
+        Q0_from_inst_latch = Q_from_inst_latch[-1]
+        outputs_from_complements_of_one = []
+        for idx, xor_gate in enumerate(self.xor_gates_for_complements):
+            outputs_from_complements_of_one.append(xor_gate([Q0_from_inst_latch, data_out_from_memory[idx]]))
+        input_a = outputs_from_complements_of_one
+        self.input_a = input_a
+
+        if enable_low_byte:
+            carry_signal_from_tri_state_buffers = 0 # low byte, no carry in    
+            input_b = self.low_latch.getQ()[1:]
+        elif enable_middle_byte:
+            carry_signal_from_tri_state_buffers = self.low_latch.getQ()[0]  # carry out from low byte
+            input_b = self.middle_latch.getQ()[1:]
+        elif enable_high_byte:
+            carry_signal_from_tri_state_buffers = self.middle_latch.getQ()[0]  # carry out from middle byte
+            input_b = self.high_latch.getQ()
+        else:
+            # Default states to prevent floating wires during Instruction Fetch
+            input_b = [0] * self.nbits
+            carry_signal_from_tri_state_buffers = 0
+
+
+        carry_in_adder = self.or_gate_for_carry_in_adder([self.and_gate_for_carry_in_adder([enable_low_byte, Q0_from_inst_latch]), carry_signal_from_tri_state_buffers])
+        self.carry_in_adder = carry_in_adder
+        overflow, sum_bits = self.adder(input_a, input_b, carry_in_adder)
+        carry_out = self.adder.get_carry_out()
+
+        if enable_low_byte:
+            self.low_latch([carry_out]+sum_bits, low_byte_latch_clk)  # Data, Clock, Preset(0), Clear(0)
+        elif enable_middle_byte:
+            self.middle_latch([carry_out]+sum_bits, mid_byte_latch_clk)  # Data, Clock, Preset(0), Clear(0)
+        elif enable_high_byte:
+            self.high_latch(sum_bits, high_byte_latch_clk)  # Data, Clock, Preset(0), Clear(0)
+
+        # RAM write
+        Q2_from_inst_latch = Q_from_inst_latch[-3]
+        ram_write = self.and_gate_for_write_ram([Q2_from_inst_latch, pulse, self.invert_for_write_ram([enable_insruct])])
+
+        if ram_write:
+            if enable_low_byte:
+                self.write_to_memory(addr, self.low_latch.getQ()[1:]) # [0] is carry_out
+            elif enable_middle_byte:
+                self.write_to_memory(addr, self.middle_latch.getQ()[1:]) # [0] is carry_out
+            elif enable_high_byte:
+                self.write_to_memory(addr, self.high_latch.getQ())
+            
+
+    def write_to_memory(self, address, data):
+        self.ram64KB(address, data, write=1)
+
+    def read_low_register(self):
+        return self.low_latch.getQ()[0], self.low_latch.getQ()[1:]
+    
+    def read_middle_register(self):
+        return self.middle_latch.getQ()[0], self.middle_latch.getQ()[1:]        
+    
+    def read_high_register(self):
+        return self.high_latch.getQ()        
     
