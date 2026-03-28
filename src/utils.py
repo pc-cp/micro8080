@@ -951,15 +951,25 @@ class Decoder_3_8:
         address = [[address[i]] for i in range(len(address))] # convert to list of lists for inverters gate input
         # TODO(PengChen:) this have potential bug, logcial error, address = [0,0,1] -> output[3] is 1
         # but should out[6] is 1.
+        # output = [0] * self.nout
+        # output[7] = self.and_gates[0]([write, self.inverters[2](address[2]), self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1000
+        # output[6] = self.and_gates[1]([write, self.inverters[2](address[2]), self.inverters[1](address[1]), address[0][0]]) # 1001
+        # output[5] = self.and_gates[2]([write, self.inverters[2](address[2]), address[1][0], self.inverters[0](address[0])]) # 1010
+        # output[4] = self.and_gates[3]([write, self.inverters[2](address[2]), address[1][0], address[0][0]]) # 1011
+        # output[3] = self.and_gates[4]([write, address[2][0], self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1100
+        # output[2] = self.and_gates[5]([write, address[2][0], self.inverters[1](address[1]), address[0][0]]) # 1101
+        # output[1] = self.and_gates[6]([write, address[2][0], address[1][0], self.inverters[0](address[0])]) # 1110
+        # output[0] = self.and_gates[7]([write, address[2][0], address[1][0], address[0][0]]) # 1111
+        # FIX above TODO bug
         output = [0] * self.nout
-        output[7] = self.and_gates[0]([write, self.inverters[2](address[2]), self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1000
-        output[6] = self.and_gates[1]([write, self.inverters[2](address[2]), self.inverters[1](address[1]), address[0][0]]) # 1001
-        output[5] = self.and_gates[2]([write, self.inverters[2](address[2]), address[1][0], self.inverters[0](address[0])]) # 1010
-        output[4] = self.and_gates[3]([write, self.inverters[2](address[2]), address[1][0], address[0][0]]) # 1011
-        output[3] = self.and_gates[4]([write, address[2][0], self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1100
-        output[2] = self.and_gates[5]([write, address[2][0], self.inverters[1](address[1]), address[0][0]]) # 1101
-        output[1] = self.and_gates[6]([write, address[2][0], address[1][0], self.inverters[0](address[0])]) # 1110
-        output[0] = self.and_gates[7]([write, address[2][0], address[1][0], address[0][0]]) # 1111
+        output[7] = self.and_gates[0]([write, self.inverters[0](address[0]), self.inverters[1](address[1]), self.inverters[2](address[2])]) # 1000
+        output[6] = self.and_gates[1]([write, self.inverters[0](address[0]), self.inverters[1](address[1]), address[2][0]]) # 1001
+        output[5] = self.and_gates[2]([write, self.inverters[0](address[0]), address[1][0],                 self.inverters[2](address[2])]) # 1010
+        output[4] = self.and_gates[3]([write, self.inverters[0](address[0]), address[1][0],                 address[2][0]]) # 1011
+        output[3] = self.and_gates[4]([write, address[0][0],                 self.inverters[1](address[1]), self.inverters[2](address[2])]) # 1100
+        output[2] = self.and_gates[5]([write, address[0][0],                 self.inverters[1](address[1]), address[2][0]]) # 1101
+        output[1] = self.and_gates[6]([write, address[0][0],                 address[1][0],                 self.inverters[2](address[2])]) # 1110
+        output[0] = self.and_gates[7]([write, address[0][0],                 address[1][0],                 address[2][0]]) # 1111
         # output[0] is MSB
         return output
 
@@ -980,15 +990,26 @@ class Selector_8_1:
         assert len(out_from_memory) == self.nout, f"Out_from_memory must be {self.out} bits long"
         address = [[address[i]] for i in range(len(address))] # convert to list of lists for inverters gate input
 
+        # output = [0] * self.nout
+        # output[7] = self.and_gates[0]([out_from_memory[7], self.inverters[2](address[2]), self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1000
+        # output[6] = self.and_gates[1]([out_from_memory[6], self.inverters[2](address[2]), self.inverters[1](address[1]), address[0][0]]) # 1001
+        # output[5] = self.and_gates[2]([out_from_memory[5], self.inverters[2](address[2]), address[1][0], self.inverters[0](address[0])]) # 1010
+        # output[4] = self.and_gates[3]([out_from_memory[4], self.inverters[2](address[2]), address[1][0], address[0][0]]) # 1011
+        # output[3] = self.and_gates[4]([out_from_memory[3], address[2][0], self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1100
+        # output[2] = self.and_gates[5]([out_from_memory[2], address[2][0], self.inverters[1](address[1]), address[0][0]]) # 1101
+        # output[1] = self.and_gates[6]([out_from_memory[1], address[2][0], address[1][0], self.inverters[0](address[0])]) # 1110
+        # output[0] = self.and_gates[7]([out_from_memory[0], address[2][0], address[1][0], address[0][0]]) # 1111
+        # FIX above TODO bug
         output = [0] * self.nout
-        output[7] = self.and_gates[0]([out_from_memory[7], self.inverters[2](address[2]), self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1000
-        output[6] = self.and_gates[1]([out_from_memory[6], self.inverters[2](address[2]), self.inverters[1](address[1]), address[0][0]]) # 1001
-        output[5] = self.and_gates[2]([out_from_memory[5], self.inverters[2](address[2]), address[1][0], self.inverters[0](address[0])]) # 1010
-        output[4] = self.and_gates[3]([out_from_memory[4], self.inverters[2](address[2]), address[1][0], address[0][0]]) # 1011
-        output[3] = self.and_gates[4]([out_from_memory[3], address[2][0], self.inverters[1](address[1]), self.inverters[0](address[0])]) # 1100
-        output[2] = self.and_gates[5]([out_from_memory[2], address[2][0], self.inverters[1](address[1]), address[0][0]]) # 1101
-        output[1] = self.and_gates[6]([out_from_memory[1], address[2][0], address[1][0], self.inverters[0](address[0])]) # 1110
-        output[0] = self.and_gates[7]([out_from_memory[0], address[2][0], address[1][0], address[0][0]]) # 1111
+        output[7] = self.and_gates[0]([out_from_memory[7], self.inverters[0](address[0]), self.inverters[1](address[1]), self.inverters[2](address[2])]) # 1000
+        output[6] = self.and_gates[1]([out_from_memory[6], self.inverters[0](address[0]), self.inverters[1](address[1]), address[2][0]]) # 1001
+        output[5] = self.and_gates[2]([out_from_memory[5], self.inverters[0](address[0]), address[1][0],                 self.inverters[2](address[2])]) # 1010
+        output[4] = self.and_gates[3]([out_from_memory[4], self.inverters[0](address[0]), address[1][0],                 address[2][0]]) # 1011
+        output[3] = self.and_gates[4]([out_from_memory[3], address[0][0],                 self.inverters[1](address[1]), self.inverters[2](address[2])]) # 1100
+        output[2] = self.and_gates[5]([out_from_memory[2], address[0][0],                 self.inverters[1](address[1]), address[2][0]]) # 1101
+        output[1] = self.and_gates[6]([out_from_memory[1], address[0][0],                 address[1][0],                 self.inverters[2](address[2])]) # 1110
+        output[0] = self.and_gates[7]([out_from_memory[0], address[0][0],                 address[1][0],                 address[2][0]]) # 1111
+
         out = self.or_gate(output)
         return [out]
     
