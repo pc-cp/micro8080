@@ -516,6 +516,18 @@ class NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear:
         
         # Solder 'n' Edge-Triggered D-Flip-Flops onto the board side-by-side
         self.flip_flops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
+
+    def SetMaxData(self):
+        for ff in self.flip_flops:
+            ff([0, 0, 1, 0]) # D = 0, CLK = 0, PRE = 1, CLR = 0
+    
+    def SetData(self, data):
+        for idx, ff in enumerate(self.flip_flops):
+            if data[idx] == 1:
+                ff([0, 0, 1, 0]) # D = 0, CLK = 0, PRE = 1, CLR = 0
+            else:
+                ff([0, 0, 0, 1]) # D = 0, CLK = 0, PRE = 0, CLR = 1
+
     def getQ(self):
         return [ff.getQ() for ff in self.flip_flops]
     
@@ -932,7 +944,7 @@ class NBitsMemory:
         bits = [bit.getQ() for bit in self.latches]
         return bits # return MSB first, LSB last
     
-class Decoder_3_8:
+class Decoder_3_8_bk:
     """
     3 to 8 decoder, takes 3 input bits and decodes them into 8 output lines.
     Only one output line will be high (1) at a time
@@ -943,8 +955,18 @@ class Decoder_3_8:
         self.nout = nout
         self.inverters = [Inverter() for _ in range(self.nin)]
         self.and_gates = [AND(4) for _ in range(self.nout)]
+        self.and_gates_with_write = [AND(2) for _ in range(self.nout)]
+
+    def write(self, inputs, write):
+        assert len(inputs) == self.nout, f"Inputs must be {self.nout} bits long"
+        assert write in [0, 1], "Write signal must be 0 or 1"
+        # This function will take the write signal and the inputs, and return the output of the AND gate
+        outputs = []
+        for i in range(self.nout):
+            outputs.append(self.and_gates_with_write[i]([write, inputs[i]]))
+        return outputs
     
-    def __call__(self, address, write):
+    def __call__(self, address, write=1):
         assert len(address) == self.nin, "Input must be 3 bits long"
         assert write in [0, 1], "Write signal must be 0 or 1"
 
@@ -973,7 +995,7 @@ class Decoder_3_8:
         # output[0] is MSB
         return output
 
-class Selector_8_1:
+class Selector_8_1_bk:
     """
     8 to 1 selector, takes 8 input lines and selects one of them based on a 3-bit address.
     for example, if the address is 101, then the output will be the value of the 00100000 -> output[2] out_from_memory line
@@ -1013,6 +1035,74 @@ class Selector_8_1:
         out = self.or_gate(output)
         return [out]
     
+class Decoder_3_8:
+    """
+    3 to 8 decoder with an Enable pin.
+    Input 000 -> output[0] is 1 (if enable=1)
+    """
+    def __init__(self, nin=3, nout=8):
+        self.nin = nin
+        self.nout = nout
+        self.inverters = [Inverter() for _ in range(self.nin)]
+        # We now use 4-input AND gates: 3 for address, 1 for the Enable pin
+        self.and_gates = [AND(4) for _ in range(self.nout)] 
+
+    def __call__(self, address, enable=1):
+        assert len(address) == self.nin, "Input must be 3 bits long"
+
+        idxs = [[(i >> 2) & 1, (i >> 1) & 1, i & 1] for i in range(self.nout)]
+        address = [[address[i]] for i in range(len(address))] 
+        output = [0] * self.nout
+        
+        for i, idx in enumerate(idxs):
+            input_and = [enable] # The Enable pin is the first input to the AND gate!
+            
+            for j, val in enumerate(idx):
+                if val == 0:
+                    input_and.append(self.inverters[j](address[j]))
+                else:
+                    input_and.append(address[j][0])
+            
+            output[i] = self.and_gates[i](input_and)
+            
+        return output
+
+
+class Selector_8_1:
+    """
+    8 to 1 selector.
+    Input 000 -> output[0] is 1
+    Input 111 -> output[7] is 1
+    """
+    def __init__(self, nin=3, nout=8):
+        self.nin = nin
+        self.nout = nout
+        self.inverters = [Inverter() for _ in range(self.nin)]
+        self.and_gates = [AND(4) for _ in range(self.nout)] # 3 inputs for Address
+        self.or_gate = OR(self.nout)
+    
+    def __call__(self, address, out_from_memory):
+        assert len(address) == self.nin, "Input must be 3 bits long"
+
+        # Dynamically generate all 8 possible binary states: 000 to 111
+        idxs = [[(i >> 2) & 1, (i >> 1) & 1, i & 1] for i in range(self.nout)]
+        
+        address = [[address[i]] for i in range(len(address))] 
+        output = [0] * self.nout
+        
+        for i, idx in enumerate(idxs):
+            input_and = [out_from_memory[i]]
+            for j, val in enumerate(idx):
+                if val == 0:
+                    input_and.append(self.inverters[j](address[j]))
+                else:
+                    input_and.append(address[j][0])
+            
+            # Straight 1-to-1 mapping! index 0 = output[0]
+            output[i] = self.and_gates[i](input_and)
+        # output[0] is LSB
+        out = self.or_gate(output)
+        return [out]
 
 class RAM_8_1:
     """
