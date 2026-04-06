@@ -1336,6 +1336,7 @@ class RAM_64KB:
         self.decoder0 = Decoder_4_16()  # To select which RAM_16_8 to use based on the address[0:4]
         self.decoder1 = Decoder_4_16()  # To select which RAM_16_8 to use based on the address[4:8]
         self.decoder2 = Decoder_4_16()  # To select which RAM_16_8 to use based on the address[8:12]
+        self.tri = TriStateBuffer(self.word_size)
 
     def __call__(self, address, data_in, write):
         assert len(address) == 16, "Address must be 16 bits long"
@@ -1367,7 +1368,7 @@ class RAM_64KB:
         
         # return self.read(address)
 
-    def read(self, address):
+    def read(self, address, enable=1):
         out0 = self.decoder0(address[:4])
         out1 = self.decoder1(address[4:8])
         out2 = self.decoder2(address[8:12])
@@ -1393,6 +1394,7 @@ class RAM_64KB:
         #             idx = (i << 8) | (j << 4) | k
         #             # the write signal is passed directly into the smaller chip1
         #             outputs = self.ram_16_8_cells[idx].read(address[12:])
+        outputs = self.tri(outputs, enable)
         return outputs
     
 class ControlSignals:
@@ -1715,4 +1717,454 @@ class AutomatedAccumulatingAdderV2:
     
     def read_high_register(self):
         return self.high_latch.getQ()        
+
+# ------------------------- start ch22 ----------------------------------
+class Logic:
+    def __init__(self, nin_data = 8, nin_control = 3):
+        self.nin_data = nin_data
+        self.nin_control = nin_control
+
+
+        self.and_gates_of_input = [AND(2) for _ in range(self.nin_data)]
+        self.xor_gates_of_input = [XOR() for _ in range(self.nin_data)]
+        self.or_gates_of_input = [OR(2) for _ in range(self.nin_data)]
+
+        self.and_gate_of_enable_and = AND(3)
+        self.and_gate_of_enable_xor = AND(3)
+        self.and_gate_of_enable_or = AND(3)
+
+        self.invert_gate_of_f0 = Inverter()
+        self.invert_gate_of_f1 = Inverter()
+
+        self.enable_and_output = 0
+        self.enable_xor_output = 0
+        self.enable_or_output = 0
+
+    def __call__(self, input_A, input_B, F2_0):
+        assert len(input_A) == self.nin_data, "Input must be {self.nin_data} bits long"
+        assert len(input_B) == self.nin_data, "Input must be {self.nin_data} bits long"
+        assert len(F2_0) == self.nin_control, "Input must be {self.nin_control} bits long"
+
+        invert_of_f0 = self.invert_gate_of_f0([F2_0[-1]])
+        invert_of_f1 = self.invert_gate_of_f1([F2_0[-2]])
+
+        self.enable_and_output = self.and_gate_of_enable_and([invert_of_f0, invert_of_f1, F2_0[0]])
+        self.enable_xor_output = self.and_gate_of_enable_xor([F2_0[-1], invert_of_f1, F2_0[0]])
+        self.enable_or_output = self.and_gate_of_enable_or([invert_of_f0, F2_0[1], F2_0[0]])
+
+        output = []
+        if self.enable_and_output:
+            for idx, and_gate in enumerate(self.and_gates_of_input):
+                output.append(and_gate([input_A[idx], input_B[idx]]))
+
+        elif self.enable_xor_output:
+            for idx, xor_gate in enumerate(self.xor_gates_of_input):
+                output.append(xor_gate([input_A[idx], input_B[idx]]))
+        elif self.enable_or_output:
+            for idx, or_gate in enumerate(self.or_gates_of_input):
+                output.append(or_gate([input_A[idx], input_B[idx]]))
+        else:
+            # If not selected (e.g., ALU is doing Addition), output 8 dead wires
+            output = [0] * self.nin_data
+
+        return output
     
+class Add_Subtract:
+    def __init__(self, nin_data = 8, nin_control = 2):
+        self.nin_data = nin_data
+        self.nin_control = nin_control
+
+        # ones' complement
+        self.xor_gates_for_complements = [XOR() for _ in range(self.nin_data)]
+
+        # NBitsAccumulator
+        self.adder = NBitAdderWithOverflow(self.nin_data)
+
+        self.invert_gate_of_f0 = Inverter()
+        self.and_gate_of_f0_CY_in = AND(2)
+        self.and_gate_of_f0_f1 = AND(2)
+
+        self.or_gate_of_CI = OR(2)
+
+    def __call__(self, input_A, input_B, F1_0, CY_In = 0):
+        assert len(input_A) == self.nin_data, f"Input must be {self.nin_data} bits long"
+        assert len(input_B) == self.nin_data, f"Input must be {self.nin_data} bits long"
+        assert len(F1_0) == self.nin_control, f"Input must be {self.nin_control} bits long"
+
+        invert_of_f0 = self.invert_gate_of_f0([F1_0[1]])
+        invert_flag = F1_0[0]
+        CI_flag = self.or_gate_of_CI([self.and_gate_of_f0_CY_in([F1_0[1], CY_In]), self.and_gate_of_f0_f1([invert_of_f0, F1_0[0]])])
+        
+        outputs_from_complements_of_one = []
+        for idx, xor_gate in enumerate(self.xor_gates_for_complements):
+            outputs_from_complements_of_one.append(xor_gate([invert_flag, input_B[idx]]))
+        operand_B = outputs_from_complements_of_one
+
+        overflow, sum_bits = self.adder(input_A, operand_B, CI_flag)
+        carry_out = self.adder.get_carry_out()
+
+        return carry_out, sum_bits
+        
+            
+    
+class ALU:
+    def __init__(self, nin_data = 8, nin_control_signal = 3):
+        self.nin_data = nin_data
+        self.nin_control = nin_control_signal
+
+        self.add_and_subtract = Add_Subtract(self.nin_data, self.nin_control-1)
+        self.logic = Logic(self.nin_data, self.nin_control)
+
+        self.enable_add_or_sub = 0
+
+        # just use 3 bits although use nin_data bits here
+        self.flags_latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nin_data)
+        self.result_latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nin_data)
+
+        self.invert_of_f2 = Inverter()
+        self.and_gate_of_f0_f1 = AND()
+        self.or_gate_of_invert_of_f2_other = OR()
+        self.and_gate_of_cy_out_other = AND()
+
+        self.nor_gates_of_flags =  NOR(self.nin_data)
+
+        self.tri_add_sub = TriStateBuffer(self.nin_data)
+        self.data_bus = DataBus(num_buffers=2, nbits=self.nin_data)
+        self.tri_result = TriStateBuffer(self.nin_data)
+
+    def __call__(self, input_A, input_B, F2_0, clock, enable):
+        assert len(input_A) == self.nin_data, f"Input must be {self.nin_data} bits long"
+        assert len(input_B) == self.nin_data, f"Input must be {self.nin_data} bits long"
+        assert len(F2_0) == self.nin_control, f"Input must be {self.nin_control} bits long"
+        assert clock in [0, 1], f"clock signal must be 0 or 1"
+        assert enable in [0, 1], f"enable signal must be 0 or 1"
+
+        invert_of_f2 = self.invert_of_f2([F2_0[0]])
+        self.enable_add_or_sub = invert_of_f2
+
+        and_of_f1_f0 = self.and_gate_of_f0_f1([F2_0[1], F2_0[2]])
+        or_of_and_invert_f2 = self.or_gate_of_invert_of_f2_other([invert_of_f2, and_of_f1_f0])
+
+        # flags current have 3 bits is meaningful: 
+        # flags[0]: sign flag, flags[1]: zero flag, flags[2]: carry flag
+        flags = self.flags_latch.getQ()
+        # Carry flag then circles back up to provide the CY In input of the Add/Sub module
+        carry_out, sum_bits = self.add_and_subtract(input_A, input_B, F2_0[1:], flags[2])
+
+        and_of_cy_out_or = self.and_gate_of_cy_out_other([carry_out, or_of_and_invert_f2])
+
+        # new flags
+        new_flags = [0] * self.nin_data
+        new_flags[2] = and_of_cy_out_or
+
+        result_of_logic = self.logic(input_A, input_B, F2_0)
+
+        # this tick's output from add_and_subtract
+        output_from_add_sub = self.tri_add_sub(sum_bits, self.enable_add_or_sub)
+        new_flags[1] = self.nor_gates_of_flags(output_from_add_sub)
+        new_flags[0] = output_from_add_sub[0] # MSB
+
+        self.result_latch(self.data_bus([output_from_add_sub, result_of_logic]), clock)
+
+        self.flags_latch(new_flags, clock)
+        return self.tri_result(self.result_latch.getQ(), enable)
+        # if self.enable_add_or_sub:
+        #     new_flags[1] = self.nor_gates_of_flags(sum_bits)
+        #     new_flags[0] = sum_bits[0] # MSB
+
+        #     self.result_latch(sum_bits, clock)
+
+        # else:
+        #     new_flags[1] = self.nor_gates_of_flags(result_of_logic)
+        #     # new_flags[0] = flags[0] # old sign flag
+        #     new_flags[0] = result_of_logic # maybe we also check logic output?
+
+        #     self.result_latch(result_of_logic, clock)
+
+        # self.flags_latch(new_flags, clock)
+
+        # output = [0] * self.nin_data
+        # if enable:
+        #     output = self.result_latch.getQ()
+
+        # return output
+
+# ------------------------- end ch21 ----------------------------------
+# ------------------------- start ch22 ----------------------------------
+class TriStateBuffer:
+    """
+    Simulates a Tri-State Buffer for an 8-bit bus using pure logic gates.
+    Instead of outputting 'None' when disabled, it forces the output to all 0s.
+    (PengChen:) use if condition and bool variable to simulate this buffer
+    so ugly, so gemini give me this implement.
+    """
+    def __init__(self, nbits=8):
+        self.nbits = nbits
+        self.and_gates = [AND(2) for _ in range(self.nbits)]
+
+    def __call__(self, data_in, enable):
+        # If enable=1, 1 AND Data = Data. (Passes through)
+        # If enable=0, 0 AND Data = 0. (Blocks data, masking it to 0s)
+        
+        output = []
+        for i in range(self.nbits):
+            output.append(self.and_gates[i]([data_in[i], enable]))
+            
+        return output
+    
+class DataBus:
+    """ 
+    (PengChen:) be compatible class TriStateBuffer
+    written by gemini
+    """
+    def __init__(self, num_buffers, nbits=8):
+        self.nbits = nbits
+        self.num_buffers = num_buffers
+        # A giant OR gate for each wire on the bus. 
+        # If num_buffers is 8, this builds an 8-input OR gate for each wire.
+        self.or_gates = [OR(self.num_buffers) for _ in range(self.nbits)] 
+
+    def __call__(self, list_of_buffer_outputs):
+        assert len(list_of_buffer_outputs) == self.num_buffers, f"Bus expects {self.num_buffers} connections!"
+        
+        bus_result = []
+        for i in range(self.nbits):
+            # This slices vertically! It grabs bit `i` from EVERY buffer in the list.
+            # E.g., for wire 0, it grabs bit 0 from Reg A, bit 0 from Reg B, bit 0 from Reg C...
+            bits_for_this_wire = [buf_out[i] for buf_out in list_of_buffer_outputs]
+            
+            # Shove all those bits into the giant OR gate
+            bus_result.append(self.or_gates[i](bits_for_this_wire))
+            
+        return bus_result
+    
+class RegisterArray:
+    """
+    implement like: https://codehiddenlanguage.com/Chapter22/
+    and page on book: 344
+    """
+    def __init__(self, nbits = 8):
+        self.nbits = nbits # bits of latch
+        self.decoder_clock = Decoder_3_8()
+        self.decoder_enable = Decoder_3_8()
+
+        self.latch_A = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        self.latch_B = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        self.latch_C = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        self.latch_D = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        self.latch_E = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        self.latch_H = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        self.latch_L = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        
+        self.latchs = { 0: self.latch_B, 
+                        1: self.latch_C,
+                        2: self.latch_D,
+                        3: self.latch_E,
+                        4: self.latch_H,
+                        5: self.latch_L,
+                        # watch out, 6: Memory
+                        7: self.latch_A,}
+        
+        self.tri_A = TriStateBuffer(self.nbits)
+        self.tri_B = TriStateBuffer(self.nbits)
+        self.tri_C = TriStateBuffer(self.nbits)
+        self.tri_D = TriStateBuffer(self.nbits)
+        self.tri_E = TriStateBuffer(self.nbits)
+        self.tri_H = TriStateBuffer(self.nbits)
+        self.tri_L = TriStateBuffer(self.nbits)
+        
+        self.tris = {   0: self.tri_B, 
+                        1: self.tri_C,
+                        2: self.tri_D,
+                        3: self.tri_E,
+                        4: self.tri_H,
+                        5: self.tri_L,
+                        # watch out, 6: Memory
+                        7: self.tri_A,}
+
+        self.data_bus = DataBus(num_buffers=len(self.latchs), nbits=self.nbits)
+        self.addr_nbits = 16
+        # num_buffers need change after
+        self.addr_bus = DataBus(num_buffers=7, nbits=self.addr_nbits)
+        self.tri_hl = TriStateBuffer(self.addr_nbits)
+
+        self.clock_idx = [0] * (len(self.latchs) + 1) 
+        self.enable_idx = [0] * (len(self.latchs) + 1) 
+        self.or_gate_for_acc_clk = OR()
+        self.or_gate_for_acc_read = OR()
+
+        # self.inst_latch1 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        # self.inst_latch2 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        # self.enable_inst_latch2 = 0
+        # self.inst_latch3 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+
+        # page 352: 
+        self.or_gate_h_clk = OR()
+        self.or_gate_l_clk = OR()
+    
+    def __call__(self, data, select, clock, hl_clock, hl_select, addr):
+        # select is SI2, SI1, SI0 in page 357
+        assert len(data) == self.nbits, f"Inputs must be {self.nbits} bits long"
+        assert len(select) == 3, f"selects must be 3 bits long"
+        assert clock in [0, 1], "clock signal must be 0 or 1"
+
+        # select is [i0, i1, i2]
+        # latch_idx will let latch_idx[i0*4+i1*2+i2] = 1, other is 0
+        # example [1, 1, 1]
+        # latch_idx is [0, 0, 0, 0, 0, 0, 0, 1]
+        # that suppose clock/enable is 1, otherwise latch_idx is all zeros
+        clock_idx = self.decoder_clock(select, enable=clock)
+        assert (sum(clock_idx) == 1 and clock == 1) or ((sum(clock_idx) == 0 and clock == 0)), "FATAL: Check Decoder_3_8 input/output"
+        
+        duplicate_datas = self.duplicate_data_to_each_latch(data)
+        # clock_idx[3] = self.or_gate_h_clk([clock_idx[3], HL_clock])
+        # clock_idx[2] = self.or_gate_l_clk([clock_idx[2], HL_clock])
+        
+        if hl_select:
+            duplicate_datas[4] = addr[:8]
+            duplicate_datas[5] = addr[8:]
+            clock_idx[4] = self.or_gate_h_clk([clock_idx[4], hl_clock])
+            clock_idx[5] = self.or_gate_l_clk([clock_idx[5], hl_clock])
+        self.clock_idx = clock_idx
+
+        self.write_helper(duplicate_datas, clock_idx)
+
+    def duplicate_data_to_each_latch(self, data):
+        datas = []
+        for _ in range(len(self.latchs) + 1):
+            datas.append(data)
+        return datas
+
+    def write_accumulator(self, data, clk):
+        # clk is Acc Clock in page 357
+        self.clock_idx[7] = self.or_gate_for_acc_clk([clk, self.clock_idx[7]])
+        assert sum(self.clock_idx) == 1
+        self.write_helper(self.duplicate_data_to_each_latch(data), self.clock_idx)
+        
+    def write_helper(self, datas, clock_idx):
+        for idx, clk in enumerate(clock_idx):
+            if idx == 6: # select is [1, 1, 0]
+                continue
+            self.latchs[idx](datas[idx], clk)
+
+    def read_hl(self, enable_hl):
+        return self.tri_hl(self.latch_H.getQ() + self.latch_L.getQ(), enable_hl)
+
+    def read_accumulator(self, enable):
+        # enable is Acc Enable in page 357
+        self.enable_idx[7] = self.or_gate_for_acc_read([enable, self.enable_idx[7]])
+        assert sum(self.enable_idx) == 1
+        return self.read_helper(self, self.enable_idx)
+
+    def read_register(self, select, enable):
+        # select is SO2, SO1, SO0 in page 357
+        assert len(select) == 3, f"selects must be 3 bits long"
+        assert enable in [0, 1], "enable signal must be 0 or 1"
+        
+        enable_idx = self.decoder_enable(select, enable=enable)
+        assert (sum(enable_idx) == 1 and enable == 1) or ((sum(enable_idx) == 0 and enable == 0)), "FATAL: Check Decoder_3_8 input/output"
+        self.enable_idx = enable_idx
+        return self.read_helper(self, enable_idx)
+    
+    def read_helper(self, enable_idx):
+        list_of_buffer_outputs = []
+        for idx, enab in enumerate(enable_idx):
+            if idx == 6: # select is [1, 1, 0]
+                continue
+            list_of_buffer_outputs.append(self.tris[idx](self.latchs[idx].getQ(), enab))
+
+        return self.data_bus(list_of_buffer_outputs)
+
+class InstLatch:
+    def __init__(self, nbits = 8):
+        self.nbits = nbits
+        self.inst_latch1 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        self.inst_latch2 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        self.inst_latch3 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+
+        self.inst_latchs = {
+            1:self.inst_latch1,
+            2:self.inst_latch2,
+            3:self.inst_latch3,
+        }
+
+        self.tri_2 = TriStateBuffer(self.nbits)
+        
+    def __call__(self, *args, **kwds):
+        pass
+        
+    def write_latch1(self, data, clock_idx):
+        self.write_helper(data, 1, clock_idx)
+
+    def write_latch2(self, data, clock_idx):
+        self.write_helper(data, 2, clock_idx)
+
+    def write_latch3(self, data, clock_idx):
+        self.write_helper(data, 3, clock_idx)
+
+    def write_helper(self, data, latch_idx, clock_idx):
+        self.inst_latchs[latch_idx](data, clock_idx)
+
+    def read_latch2(self, enable):
+        return self.tri_2(self.inst_latch2.getQ(), enable)
+    
+    def read_latch2_3(self, enable_2_3):
+        return self.tri_2(self.inst_latch2.getQ(), enable_2_3) + self.tri_3(self.inst_latch3.getQ(), enable_2_3)
+
+class ProgramCounter:
+    def __init__(self):
+        self.addr_bits = 16
+        self.latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.addr_bits)
+        self.tri = TriStateBuffer(self.addr_bits)
+
+    def SetMaxAddr(self):
+        self.latch.SetMaxData()
+
+    def Reset(self):
+        # set the contents of the latch to all 0
+        addrs = [0] * self.addr_bits
+        self.latch.SetData(addrs)
+
+    def SetAddr(self, addrs):
+        self.latch.SetData(addrs)
+
+    def readAddr(self, enable):
+        return self.tri(self.latch.getQ(), enable)
+        
+    def __call__(self, data, clk):
+        self.latch(datas=data, clk=clk)
+
+class IncrementerDecrementer:
+    def __init__(self):
+        """ 
+        The Incrementer / Decrementer (pages 350 – 351)
+        refer: https://codehiddenlanguage.com/Chapter22/
+        """
+        self.addr_bits = 16
+        self.xor_first_level = [XOR() for _ in range(self.addr_bits)]
+        self.xor_second_level = [XOR() for _ in range(self.addr_bits)]
+        self.and_gates = [AND() for _ in range(self.addr_bits)]
+        self.v = 1
+
+        self.latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.addr_bits)
+        self.tri = TriStateBuffer(self.addr_bits)
+        self.or_gate = OR()
+
+    def __call__(self, addrs, dec_enable, inc_enable, clock):
+        
+        self.latch(addrs, clock)
+        read_addrs = self.latch.getQ()
+        
+        v = self.v
+        output_from_Inc_Dec = []
+        for idx, addr in enumerate(reversed(read_addrs)):
+            output_from_Inc_Dec.append(self.xor_second_level[idx]([addr, v]))
+            v = self.and_gates[idx]([self.xor_first_level[idx]([dec_enable, addr]), v])
+
+        # now LSB is idx 0, so we should reverse, let MSB is idx 0
+        output_from_Inc_Dec = list(reversed(output_from_Inc_Dec))
+
+        return self.tri(output_from_Inc_Dec, self.or_gate([dec_enable, inc_enable]))
+    
+
+# ------------------------- end ch22 ----------------------------------
