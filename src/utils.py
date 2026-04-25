@@ -259,7 +259,10 @@ class NBitAdderWithOverflow:
 # ----------------- chapter 16 end -----------------
 # ----------------- chapter 17 start -----------------
 class Oscillator:
-    """ A simple system clock that alternates between 0 and 1. """
+    """
+    Simulates a simple system clock that alternates between 0 and 1.
+    Based on Charles Petzold's 'Code' (Chapter 17, Page 213).
+    """
     def __init__(self):
         self.state = 0
 
@@ -267,22 +270,29 @@ class Oscillator:
         return self.state
         
     def tick(self):
-        # Time moves forward one step!
+        # Time moves forward one step
         self.state = 1 - self.state
         return self.state
 
 class ResetSetFlipFlop:
     """
-    The key limitation of the basic SR latch is its potential illegal condition **when both set and reset inputs are asserted simultaneously**. This combination drives the latch into an unstable state, creating ambiguity and possible race conditions.
-    (R, S) from (0, 1) -> (1, 0) or (1, 0) -> (0, 1)
+    Simulates an SR (Set-Reset) Latch.
+    Latches are level-sensitive storage elements that can hold one bit of memory.
+    Based on Charles Petzold's 'Code' (Chapter 17, Page 220).
+
+    The key limitation of the basic SR latch is its potential illegal condition 
+    **when both set and reset inputs are asserted simultaneously**.
+    This combination drives the latch into an unstable state,
+    creating ambiguity and possible race conditions.
     https://www.wevolver.com/article/understanding-the-sr-latch-theory-design-truth-tables-and-practical-implementations?utm_source=chatgpt.com
     """
     def __init__(self):
         self.nin = 2
         self.nor_gate1 = NOR()
         self.nor_gate2 = NOR()
+        # Default state
         self.q = 0
-        self.q_bar = 1 - self.q
+        self.q_bar = 1
 
     def getQ(self):
         return self.q
@@ -293,17 +303,10 @@ class ResetSetFlipFlop:
     def __call__(self, x):
         assert len(x) == self.nin, "RS_FlipFlop takes exactly 2 inputs"
         r, s = x
-
-        # ------------------------------------
-        # The while True: loop perfectly mimics this physical bouncing:
-        # 1. Calculate the new reality: it evaluates what both gates want to output right now, based on the 
-        #    the current wires.
-        # 2. Check for stability: It asks, "did either of the outputs change?" 
-        # 3. If no: The circuit has stabilized! The electrons are done bouncing. 
-        # 4. If yes: The outputs did change. That means those new outputs need to flow back into the inputs
-        #    of the opposite gates. We update our internal memory (self.q = new_q) and loop again.
-        # ------------------------------------
-
+        
+        # NOTE:
+        # The 'while True' loop mimics physical electron bouncing.
+        # It loops until the outputs stabilize (meaning the gates stop changing).
         while True:
             old_q = self.q
             old_q_bar = self.q_bar
@@ -315,38 +318,17 @@ class ResetSetFlipFlop:
                 break
         return self.q, self.q_bar
 
-class ResetSetFlipFlop4Input:
-    def __init__(self):
-        # Edge-Triggered D-Type Flip-Flop with Clear and Preset (page 238)
-        self.nin = 4 # r0, r1, s0, s1
-        self.rs_flipflop = ResetSetFlipFlop()
-        self.or_gate1 = OR()
-        self.or_gate2 = OR()
-
-    def getQ(self):
-        return self.rs_flipflop.getQ()
-
-    def getQ_bar(self):
-        return self.rs_flipflop.getQ_bar()
-    
-    def __call__(self, x):
-        assert len(x) == self.nin, f"RS_FlipFlop takes exactly {self.nin} inputs"
-        r0, r1, s0, s1 = x
-        r = self.or_gate1([r0, r1])
-        s = self.or_gate2([s0, s1])
-
-        q, q_bar = self.rs_flipflop([r, s])
-        return q, q_bar
-
 class LevelTriggeredDTypeFlipFlop:
+    """
+    Simulates a Level-Triggered D-Type Latch.
+    Data is captured only when the clock level is high (1).
+    Based on Charles Petzold's 'Code' (Chapter 17, Page 225).
+    """
     def __init__(self):
         self.nin = 2
         self.invert = Inverter()
-        
-        # Solder TWO physical AND gates to our board!
         self.and_gate1 = AND()
         self.and_gate2 = AND()
-        
         self.rs_flipflop = ResetSetFlipFlop()
 
     def getQ(self):
@@ -358,33 +340,70 @@ class LevelTriggeredDTypeFlipFlop:
     def __call__(self, x):
         assert len(x) == self.nin, f"Expected {self.nin} inputs"
         data, clock = x[0], x[1]
-
-        # Wire 1: Invert the Data
+        
         not_data = self.invert([data])
-
-        # Wire 2: The Reset pin (R) gets AND(NOT Data, Clock)
         r_wire = self.and_gate1([not_data, clock])
-
-        # Wire 3: The Set pin (S) gets AND(Data, Clock)
         s_wire = self.and_gate2([data, clock])
-
-        # Feed the R and S wires into our stabilized RS Flip-Flop
+        
         q, q_bar = self.rs_flipflop([r_wire, s_wire])
-
         return q, q_bar
 
+class EdgeTriggeredDTypeFlipFlop:
+    """
+    Simulates an Edge-Triggered D-Type Flip-Flop.
+    Data is captured ONLY exactly when the clock transitions from 0 to 1 (Rising Edge).
+    Based on Charles Petzold's 'Code' (Chapter 17, Page 229).
+    """
+    def __init__(self):
+        self.nin = 2
+        self.level_d_latchs_stage1 = LevelTriggeredDTypeFlipFlop()
+        self.level_d_latchs_stage2 = LevelTriggeredDTypeFlipFlop()
+        self.invert1 = Inverter()
+
+    def getQ(self):
+        return self.level_d_latchs_stage2.getQ()
+
+    def getQ_bar(self):
+        return self.level_d_latchs_stage2.getQ_bar()
+        
+    def __call__(self, x):
+        """
+        Executes one hardware tick for the flip-flop.
+        
+        NOTE (Hardware Physics: Setup & Hold Time): 
+        Changing the Data pin at the exact same microsecond the Clock pin rises 
+        creates a race condition. 
+        
+        Example of a violation:
+        my_flipflop([0, 0]) # D = 0, CLK = 0. Internal latches prime to 0.
+        my_flipflop([1, 1]) # D = 0, CLK = 0 -> 1. Race condition!
+        
+        Because simulated electrons take time to route through the gates, the 
+        internal latches will still trigger using the old '0' state. 
+        Rule: Data must remain stable before and during the clock's rising edge.
+        """
+        assert len(x) == self.nin, f"Expected {self.nin} inputs"
+        data, clock = x[0], x[1]
+        
+        not_clk = self.invert1([clock])
+        q1, q_bar1 = self.level_d_latchs_stage1([data, not_clk])
+        q2, q_bar2 = self.level_d_latchs_stage2([q1, clock])
+        return q2, q_bar2
+
 class LevelTriggeredDTypeFlipFlopWithClear:
+    """
+    Simulates a Level-Triggered D-Type Latch with a Clear pin.
+    NOTE: This implementation slightly differs from the book (Page 238) 
+    by adding an inverter to protect the set pin from conflict.
+    """
     def __init__(self):
         self.nin = 3 # data, clk, clr
         self.invert_data = Inverter()
-         # added to protect the set pin(this different between book in page 238)
         self.invert_clr = Inverter()
         
-        # Solder TWO physical AND gates to our board!
         self.and_gate_r = AND(2)
-        self.and_gate_s = AND(3) # upgraded to 3 inputs
+        self.and_gate_s = AND(3)
         self.or_gate = OR()
-        
         self.rs_flipflop = ResetSetFlipFlop()
 
     def getQ(self):
@@ -403,23 +422,20 @@ class LevelTriggeredDTypeFlipFlopWithClear:
             
         not_data = self.invert_data([data])
         not_clr = self.invert_clr([clr])
-            
-        # Wire 1: The Reset pin (R) gets OR(Clr, AND(NOT Data, Clock))
+
         and_r = self.and_gate_r([not_data, clock])
         r_wire = self.or_gate([clr, and_r])
-
-        # Wire 2: The Set pin (S) gets AND(Data, Clock, NOT Clr)
         s_wire = self.and_gate_s([data, clock, not_clr])
-
-        # Feed the R and S wires into our stabilized RS Flip-Flop
+        
         q, q_bar = self.rs_flipflop([r_wire, s_wire])
-
         return q, q_bar
 
 class NBitLevelTriggeredDTypeFlipFlopWithClear:
+    """
+    Simulates an N-bit wide Register using Level-Triggered D-Type Latches.
+    """
     def __init__(self, nbits):
         self.nbits = nbits
-        # Solder 'n' D-Latches onto the board side-by-side
         self.level_d_latchs = [LevelTriggeredDTypeFlipFlopWithClear() for _ in range(self.nbits)]
     
     def getQ(self):
@@ -428,59 +444,52 @@ class NBitLevelTriggeredDTypeFlipFlopWithClear:
     def getQ_bar(self):
         return [latch.getQ_bar() for latch in self.level_d_latchs]
 
-
-    # We separate the data bus (a list) from the clock (a single bit)
     def __call__(self, datas, clk, clr=0):
-        assert len(datas) == self.nbits, f"Data bus must be {self.nbits} bits long"
-        
+        assert len(datas) == self.nbits, f"Data bus must be {self.nbits} bits long"        
         qs = []
-        
-        # Parallel processing! No rippling required.
         for idx in range(self.nbits):
-            # Fetch the latch for this specific bit, and pass its data and the shared clock
             q, q_bar = self.level_d_latchs[idx]([datas[idx], clk, clr])
             qs.append(q)
-            
         return qs
 
-class EdgeTriggeredDTypeFlipFlop:
+class ResetSetFlipFlop4Input:
+    """
+    A subcomponent: An SR Latch that accepts 4 inputs (R0, R1, S0, S1).
+    Used to build complex Edge-Triggered Flip-Flops.
+    """
     def __init__(self):
-        self.nin = 2
-
-        self.level_d_latchs_stage1 = LevelTriggeredDTypeFlipFlop()
-        self.level_d_latchs_stage2 = LevelTriggeredDTypeFlipFlop()
-        self.invert1 = Inverter()
-        # self.q, self.q_bar = 0, 1
+        self.nin = 4
+        self.rs_flipflop = ResetSetFlipFlop()
+        self.or_gate1 = OR()
+        self.or_gate2 = OR()
 
     def getQ(self):
-        return self.level_d_latchs_stage2.getQ()
+        return self.rs_flipflop.getQ()
 
     def getQ_bar(self):
-        return self.level_d_latchs_stage2.getQ_bar()
-        
+        return self.rs_flipflop.getQ_bar()
+    
     def __call__(self, x):
-        assert len(x) == self.nin, f"Expected {self.nin} inputs"
-        data, clock = x[0], x[1]
-
-        # Wire 1: Invert the Clk
-        not_clk = self.invert1([clock])
-
-        # Wire 2: get Q and Q_bar from stage1
-        q1, q_bar1 = self.level_d_latchs_stage1([data, not_clk])
-
-        # Wire 3: get Q and Q_bar from stage2
-        q2, q_bar2 = self.level_d_latchs_stage2([q1, clock])
-        return q2, q_bar2
+        assert len(x) == self.nin, f"RS_FlipFlop takes exactly {self.nin} inputs"
+        r0, r1, s0, s1 = x
+        r = self.or_gate1([r0, r1])
+        s = self.or_gate2([s0, s1])
+        q, q_bar = self.rs_flipflop([r, s])
+        return q, q_bar
 
 class EdgeTriggeredDTypeFlipFlopWithPresetAndClear:
+    """
+    Simulates an Edge-Triggered D-Type Flip-Flop with asynchronous Preset and Clear.
+    Based on Charles Petzold's 'Code' (Chapter 17, Page 238).
+    """
     def __init__(self):
         self.nin = 4
         self.rs_flipflop1 = ResetSetFlipFlop4Input()
         self.rs_flipflop2 = ResetSetFlipFlop4Input()
         self.rs_flipflop3 = ResetSetFlipFlop4Input()
         self.invert1 = Inverter()
-    
-    # page 368 that use for timing of the cpu
+
+    # NOTE: page 368 use this interface for timing of the cpu    
     def Reset(self):
         self.__call__([0, 0, 0, 1]) # D = 0, CLK = 0, PRE = 0, CLR = 1
 
@@ -489,9 +498,26 @@ class EdgeTriggeredDTypeFlipFlopWithPresetAndClear:
 
     def getQ_bar(self):
         return self.rs_flipflop3.getQ_bar()
-        
+
     def __call__(self, x):
+        """
+        Executes one hardware tick for the flip-flop.
+        
+        NOTE (Hardware Physics: Setup & Hold Time): 
+        Changing the Data pin at the exact same microsecond the Clock pin rises 
+        creates a race condition. 
+        
+        Example of a violation:
+        my_flipflop([1, 0, 0, 0]) # D = 1, CLK = 0. Internal latches prime to 1.
+        my_flipflop([0, 1, 0, 0]) # D = 0, CLK = 0 -> 1. Race condition!
+        
+        Because simulated electrons take time to route through the gates, the 
+        internal latches will still trigger using the old '1' state. 
+        Rule: Data must remain stable before and during the clock's rising edge.
+        """
         assert len(x) in (self.nin, self.nin-2), f"Expected {self.nin} inputs"
+        
+        # Unpack inputs safely
         if len(x) == self.nin:
             data, clock, preset, clear = x
         else:
@@ -499,42 +525,52 @@ class EdgeTriggeredDTypeFlipFlopWithPresetAndClear:
             preset, clear = 0, 0
 
         not_clk = self.invert1([clock])
+        
+        # Loop until the circuit stabilizes (electrons finish routing)
         while True:
-            # 1. Take a snapshot of the current reality
+            # 1. Snapshot the old reality
             old_q1, old_q_bar1 = self.rs_flipflop1.getQ(), self.rs_flipflop1.getQ_bar()
             old_q2, old_q_bar2 = self.rs_flipflop2.getQ(), self.rs_flipflop2.getQ_bar()
             old_q3, old_q_bar3 = self.rs_flipflop3.getQ(), self.rs_flipflop3.getQ_bar()
-
-            # 2. Let the electrons flow through all the wires
+            
+            # NOTE: swap FF1 with FF2 will lead potential bug.
+            # 2. Let electricity flow (SEQUENCE CHANGED FOR SETUP STRICTNESS)
+    
+            # Evaluate FF2 FIRST: The Clock triggers this gate to lock out FF1.
+            self.rs_flipflop2([clear, old_q_bar1, preset, not_clk])
+            
+            # Evaluate FF1 SECOND: The Data tries to enter, but FF2's output might block it.
             self.rs_flipflop1([self.rs_flipflop2.getQ_bar(), not_clk, data, preset])
-            self.rs_flipflop2([clear, self.rs_flipflop1.getQ_bar(), preset, not_clk])
-            q3, q_bar3 = self.rs_flipflop3([clear, self.rs_flipflop2.getQ_bar(), self.rs_flipflop1.getQ(), preset])    
+            
+            # Evaluate FF3 LAST: The final output latch.
+            q3, q_bar3 = self.rs_flipflop3([clear, self.rs_flipflop2.getQ_bar(), self.rs_flipflop1.getQ(), preset])
 
-            # 3. Did the electrons change anything? If no, the circuit is stable!
+            # 3. Check if any gates changed state. If everything is the same, we are stable.
             if (old_q1 == self.rs_flipflop1.getQ() and old_q_bar1 == self.rs_flipflop1.getQ_bar() and 
                 old_q2 == self.rs_flipflop2.getQ() and old_q_bar2 == self.rs_flipflop2.getQ_bar() and 
                 old_q3 == self.rs_flipflop3.getQ() and old_q_bar3 == self.rs_flipflop3.getQ_bar()):
-                break;
-        
+                break
+                
         return q3, q_bar3
 
 class NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear:
+    """
+    Simulates an N-bit wide Register using Edge-Triggered Flip-Flops.
+    """
     def __init__(self, nbits):
         self.nbits = nbits
-        
-        # Solder 'n' Edge-Triggered D-Flip-Flops onto the board side-by-side
         self.flip_flops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
 
     def SetMaxData(self):
         for ff in self.flip_flops:
-            ff([0, 0, 1, 0]) # D = 0, CLK = 0, PRE = 1, CLR = 0
+            ff([0, 0, 1, 0]) # PRE = 1, CLR = 0
     
     def SetData(self, data):
         for idx, ff in enumerate(self.flip_flops):
             if data[idx] == 1:
-                ff([0, 0, 1, 0]) # D = 0, CLK = 0, PRE = 1, CLR = 0
+                ff([0, 0, 1, 0]) 
             else:
-                ff([0, 0, 0, 1]) # D = 0, CLK = 0, PRE = 0, CLR = 1
+                ff([0, 0, 0, 1]) 
 
     def getQ(self):
         return [ff.getQ() for ff in self.flip_flops]
@@ -544,60 +580,59 @@ class NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear:
 
     def __call__(self, datas, clk, preset=0, clr=0):
         assert len(datas) == self.nbits, f"Data bus must be {self.nbits} bits long"
-        
         qs = []
-        
-        # Parallel processing! All bits lock in at the exact same time.
         for idx in range(self.nbits):
             q, q_bar = self.flip_flops[idx]([datas[idx], clk, preset, clr])
             qs.append(q)
-            
         return qs
 
 class NBitsAccumulator:
+    """
+    Simulates an N-Bit Accumulator (Adder + Register loop).
+    Based on Charles Petzold's 'Code' (Chapter 17, Page 231).
+    
+    NOTE (Clock Abstraction): 
+    In a fully wired CPU, this component would not manually toggle 
+    its own clock pulses. The `clk` signal would be passed in as a 
+    parameter from the global Control Unit. We simulate the full 
+    rising/falling edge cycle (0 -> 1 -> 0) internally here to make 
+    the component easier to test in isolation.
+    """
     def __init__(self, nbits):
         self.nbits = nbits
         self.adder = NBitAdderWithOverflow(self.nbits)
         self.register = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
-        # At boot-up, the memory holds all zeros
         self.current_memory = [0 for _ in range(self.nbits)]
 
     def get_register(self):
         return self.current_memory
 
     def __call__(self, inputs_sequence):
-        # We process a list of binary numbers, simulating time passing
         for data_in in inputs_sequence:
-            assert len(data_in) == self.nbits , f"Data bus must be {self.nbits} bits long"
-            # 1. The adder adds the incoming number to the CURRENT memory
+            assert len(data_in) == self.nbits, f"Data bus must be {self.nbits} bits long"
+            
+            # 1. Adder combines incoming data with current memory
             overflow, sum_bits = self.adder(data_in, self.current_memory)
 
-            # 2. Manually toggle the clock (Press the "Add" button)
+            # 2. Toggle the clock to lock in the new sum
             self.register(sum_bits, 0)
-            # RISING EDGE: Button goes down (Clk=1). The register locks in the new sum
-            self.current_memory = self.register(sum_bits, 1)
-            # Button goes back up (Clk = 0)
+            self.current_memory = self.register(sum_bits, 1) # RISING EDGE
             self.register(sum_bits, 0)
-        # Return whatever the register is holding at the very end
+            
         return self.current_memory
 
     def clear(self):
         """
-        Clears the accumulator using pure hardward math.
-        Adds the Two's complement of the current memory to itself.
+        Clears the accumulator using pure hardware math.
         X + NOT(X) + 1 = 0
         """
         my_inverter = Inverter()
-
         inverted_memory = [my_inverter([bit]) for bit in self.current_memory]
         overflow, sum_bits = self.adder(inverted_memory, self.current_memory, last_carry_in=1)
 
-        # 2. Manually toggle the clock (Press the "Add" button)
         self.register(sum_bits, 0)
-        # RISING EDGE: Button goes down (Clk=1). The register locks in the new sum
-        self.current_memory = self.register(sum_bits, 1)
-        # Button goes back up (Clk = 0)
-        self.register(sum_bits, 0)        
+        self.current_memory = self.register(sum_bits, 1) # RISING EDGE
+        self.register(sum_bits, 0) 
 
 class FrequencyDivider:
     def __init__(self):
