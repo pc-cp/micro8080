@@ -1,6 +1,10 @@
-# utils.py
+"""
+utils.py
 
-# The Basic Gates
+some components to build CPU, from basic Gates, Adder, Flip-Flop to complex ALU, RAM.
+
+"""
+# ----------------- chapter 14 -----------------
 class AND:
     def __init__(self, nin=2):
         self.nin = nin
@@ -26,20 +30,17 @@ class OR:
         return result
 
 class Inverter:
-    """The NOT gate, It strictly takes 1 input."""
     def __init__(self):
         self.nin = 1
 
     def __call__(self, x):
         assert len(x) == self.nin, "Inverter takes exactly 1 input"
-        # If 1, return 0. If 0, return 1.
         return 1 - x[0]
 
 # Composing Complex Gates
 class NAND:
     def __init__(self, nin=2):
         self.nin = nin
-        # NAND is just an AND gate followed by an Inverter
         self.and_gate = AND(nin)
         self.inverter = Inverter()
 
@@ -77,25 +78,34 @@ class XOR:
         return self.and_gate([o1, o2])
 
 class HalfAdder:
+    """
+    Implement HalfAdder:
+        Adding two binary numbers produces a sum bit and carry bit.
+
+    Refer to Charles Petzold's 'Code': https://codehiddenlanguage.com/Chapter14/.
+    This implement different with website, but same with page 176 of the book.
+    """
     def __init__(self):
         self.nin = 2
-        # The two components we need
         self.xor_gate = XOR()
         self.and_gate = AND(self.nin)
 
     def __call__(self, x):
         assert len(x) == self.nin, "Half Adder takes exactly 2 inputs"
-        # Calculate Sum and Carry
         final_sum = self.xor_gate(x)
         final_carry = self.and_gate(x)
 
-        # Return them as a tuple
         return final_carry, final_sum
-
-
+    
 class FullAdder:
+    """
+    Implement FullAdder:
+        Adding two binary numbers with the carry produces a sum bit and carry bit.
+
+    This implement different with website, but same with page 177 of the book.
+    """
     def __init__(self):
-        self.nin = 3 # # Carry-In, A, and B
+        self.nin = 3
 
         # A full adder is literally just two half adders and an OR gate
         self.ha1 = HalfAdder()
@@ -103,7 +113,6 @@ class FullAdder:
         self.or_gate = OR(2)
 
     def __call__(self, x):
-        # Carry-In, A, and B
         if len(x) == self.nin:
             carry_in, a, b = x[0], x[1], x[2]
         else:
@@ -112,20 +121,22 @@ class FullAdder:
 
         # First Half-Adder adds A and B
         carry1, sum1 = self.ha1([a, b])
-
         # Second Half-Adder adds previous sum and the Carry-In
         carry2, final_sum = self.ha2([carry_in, sum1])
-
         # The OR gate catches the carry from either Half-Adder
         final_carry = self.or_gate([carry2, carry1])
-
-        # Return them as a tuple
         return final_carry, final_sum
 
 class NBitAdderWithCarryOut:
+    """
+    Implement n bits fulladder with carry out flag:
+        Adding n bits with carry produces n bits sum and carry bit.
+    
+    Refer to Charles Petzold's 'Code': https://codehiddenlanguage.com/Chapter14/.
+    This implement same with page 180 of the book.
+    """
     def __init__(self, nbits):
-        self.nbits = nbits # Carry_In, A, and B
-        # Instantiate 'n' Full Adders
+        self.nbits = nbits
         self.fulladders = [FullAdder() for _ in range(self.nbits)]
 
     def __call__(self, x, y, last_carry_in=0):
@@ -138,16 +149,17 @@ class NBitAdderWithCarryOut:
             carry_in = final_carrys
             a = x[idx]
             b = y[idx]
-            
-            # Run the Full Adder for this column
+            # Run the Full Adder for this column bit
             carry_out, sum_out = self.fulladders[idx]([carry_in, a, b])
-            
             final_carrys = carry_out
             final_sums = [sum_out] + final_sums
-        # The final carry out of the MSB is still sitting at index 0
         return final_carrys, final_sums
 
-# include some basic data process function and NBitAdderWithOverflow
+"""
+NOTE: some basic data process functions, but they not correctly simulated by hardware,
+      because they use condition sentences.
+      now we want use it generate some bits and use for components.
+"""
 def int_to_nbit_list(num, nbits=8):
     """
     Converts an integer to an n-bit list using our simulated hardware 
@@ -159,8 +171,6 @@ def int_to_nbit_list(num, nbits=8):
 
     if num >= 0:
         return bit_list
-
-    # --- THE HARDWARE WAY ---
     
     # Step A: Pass the bits through our simulated Inverters
     my_inverter = Inverter()
@@ -172,10 +182,8 @@ def int_to_nbit_list(num, nbits=8):
     # Step B: Add 0, but set the Carry-In pin to 1
     zero_bits = [0 for _ in range(nbits)]
     overflow_carry, final_bits = adder(inverted_bits, zero_bits, last_carry_in=1)
-    
     return final_bits
-    
-# Now you can easily create your 8-bit and 16-bit specific helpers:
+
 def int_to_8bit_list(num):
     return int_to_nbit_list(num, nbits=8)
 
@@ -186,17 +194,15 @@ def bit_list_to_int(bit_list, signed=True):
     """Converts a bit list (MSB at index 0) back to a standard integer."""
     bin_str = "".join(str(bit) for bit in bit_list)
     val = int(bin_str, 2)
-    
     # If we are treating this as a signed Two's Complement number...
     if signed:
-        # Check the Most Significant Bit (Index 0)
         msb = bit_list[0]
         if msb == 1:
-            # If MSB is 1, it's negative. We calculate its true negative value.
-            # E.g., for 8 bits: val - 2^8 (val - 256)
+            # If MSB is 1, it's negative.
             val = val - (1 << len(bit_list)) 
-            
     return val
+
+# ----------------- chapter 14 -----------------
 
 class NBitAdderWithOverflow:
     def __init__(self, nbits):
