@@ -173,6 +173,57 @@ def test_cascaded_16bit_addition():
     assert s_val == 0, "Cascaded 65535 + 1 failed to overflow"
     assert c == 1, "Cascaded 65535 + 1 failed to carry out of the high byte"
 
+def test_8bit_adder_with_overflow():
+    """Test the NBitAdderWithOverflow class limits and state retention."""
+    adder8_tc = NBitAdderWithOverflow(8)
+
+    # Helper function to keep our tests clean
+    def add_and_check(num1, num2):
+        x_bits = int_to_8bit_list(num1)
+        y_bits = int_to_8bit_list(num2)
+        
+        overflow_flag, sum_bits = adder8_tc(x_bits, y_bits)
+        final_carry = adder8_tc.get_carry_out()
+        # Convert back to human-readable integer
+        result_int = bit_list_to_int(sum_bits, signed=True)
+        
+        return overflow_flag, final_carry, result_int
+
+    # ==========================================
+    # TEST CASES: 8-BIT TWO'S COMPLEMENT LIMITS
+    # ==========================================
+
+    # Test 1: Safe Positive Addition (50 + 50 = 100)
+    ovf, c_out, res = add_and_check(50, 50)
+    assert res == 100, "50 + 50 should equal 100"
+    assert ovf == 0, "50 + 50 should NOT trigger overflow"
+    assert c_out == 0
+
+    # Test 2: Safe Negative Addition (-50 + -50 = -100)
+    ovf, c_out, res = add_and_check(-50, -50)
+    assert res == -100, "-50 + -50 should equal -100"
+    assert ovf == 0, "-50 + -50 should NOT trigger overflow"
+    assert c_out == 1, "Adding two negatives should carry out past the MSB"
+
+    # Test 3: Mixed Addition (Impossible to overflow) (120 + -120 = 0)
+    ovf, c_out, res = add_and_check(120, -120)
+    assert res == 0, "120 + -120 should equal 0"
+    assert ovf == 0, "Mixed signs can NEVER trigger overflow"
+    assert c_out == 1
+
+    # Test 4: POSITIVE OVERFLOW (100 + 50 = 150 -> Wraps to -106)
+    ovf, c_out, res = add_and_check(100, 50)
+    assert res == -106, "100 + 50 should wrap to -106 in 8-bit signed math"
+    assert ovf == 1, "100 + 50 MUST trigger POSITIVE OVERFLOW flag"
+    assert c_out == 0
+
+    # Test 5: NEGATIVE OVERFLOW (-100 + -50 = -150 -> Wraps to +106)
+    ovf, c_out, res = add_and_check(-100, -50)
+    assert res == 106, "-100 + -50 should wrap to +106 in 8-bit signed math"
+    assert ovf == 1, "-100 + -50 MUST trigger NEGATIVE OVERFLOW flag"
+    assert c_out == 1
+
+
 if __name__ == "__main__":
     test_and_gate()
     test_or_gate()
@@ -189,3 +240,5 @@ if __name__ == "__main__":
     test_8bit_subtraction()
     test_16bit_addition()
     test_cascaded_16bit_addition()
+
+    test_8bit_adder_with_overflow()

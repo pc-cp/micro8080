@@ -202,27 +202,29 @@ def bit_list_to_int(bit_list, signed=True):
             val = val - (1 << len(bit_list)) 
     return val
 
-# ----------------- chapter 14 -----------------
-
+# ----------------- chapter 14 end -----------------
+# ----------------- chapter 16 start -----------------
 class NBitAdderWithOverflow:
+    """
+    Implement n bits fulladder with carry out flag:
+        Adding n bits with carry produces n bits sum, carry bit and overflow bit.
+    
+    Refer to Charles Petzold's 'Code': https://codehiddenlanguage.com/Chapter16/.
+    This implement same with page 210 of the book.
+    """
     def __init__(self, nbits):
-        self.nbits = nbits # Carry_In, A, and B
-        # Instantiate 'n' Full Adders
+        self.nbits = nbits
         self.fulladders = [FullAdder() for _ in range(self.nbits)]
-
         # below gate use for overflow
         self.inverter = Inverter()
         # AND gate detects an overflow condition for negative numbers.
-        # the sign bit of x and y inputs are both 1 and the sign
-        # of the sum is 0.
+        # the sign bit of x and y inputs are both 1 and the sign of the sum is 0.
         self.and_gate = AND(nin=3)
         # NOR gate detects an overflow condition for positive numbers.
-        # the sign bit of x and y inputs are both 0 and the sign
-        # of the sum is 1.
+        # the sign bit of x and y inputs are both 0 and the sign of the sum is 1.
         self.nor_gate = NOR(nin=3)
-        
-        self.or_gate = OR(nin=2)
-        
+        self.or_gate = OR(nin=2)        
+        # FIXME: should return from __call__, because gate no memory.
         self.carry_out = -1
 
     def __call__(self, x, y, last_carry_in=0):
@@ -235,32 +237,27 @@ class NBitAdderWithOverflow:
             carry_in = final_carrys
             a = x[idx]
             b = y[idx]
-            
             # Run the Full Adder for this column
             carry_out, sum_out = self.fulladders[idx]([carry_in, a, b])
-            
             final_carrys = carry_out
             final_sums = [sum_out] + final_sums
         # The final carry out of the MSB is still sitting at index 0
         self.carry_out = final_carrys
-
         # we return third result that reflect overflow use two-complement
         invert_msb_of_final_sum = self.inverter([final_sums[0]])
         msb_of_x = x[0]
         msb_of_y = y[0]
-
         out_of_and_gate = self.and_gate([invert_msb_of_final_sum, msb_of_x, msb_of_y])
         out_of_nor_gate = self.nor_gate([invert_msb_of_final_sum, msb_of_x, msb_of_y])
         overflow = self.or_gate([out_of_and_gate, out_of_nor_gate])
         # overflow just test MSB bit whether is 1 for two positive and 0 for two negative
-        # carry_out just test whether result can use self.nbits to represent.
         return overflow, final_sums
-    
+
+    # carry_out just test whether result can use self.nbits to represent.
     def get_carry_out(self):
         return self.carry_out
-
-# from ch17 flip-flop
-
+# ----------------- chapter 16 end -----------------
+# ----------------- chapter 17 start -----------------
 class Oscillator:
     """ A simple system clock that alternates between 0 and 1. """
     def __init__(self):
