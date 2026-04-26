@@ -957,12 +957,15 @@ class Decoder_2_4_V2:
         return output
 
 # ----------------- chapter 20 end -----------------
-# ------------------------- start ch22 ----------------------------------
+# ----------------- chapter 21 start -----------------
 class Logic:
-    def __init__(self, nin_data = 8, nin_control = 3):
+    """
+    Simulates the Logic sub-unit of the ALU.
+    Executes bitwise AND, XOR, and OR operations based on the F2_0 control signals.
+    """
+    def __init__(self, nin_data=8, nin_control=3):
         self.nin_data = nin_data
         self.nin_control = nin_control
-
 
         self.and_gates_of_input = [AND(2) for _ in range(self.nin_data)]
         self.xor_gates_of_input = [XOR() for _ in range(self.nin_data)]
@@ -980,9 +983,9 @@ class Logic:
         self.enable_or_output = 0
 
     def __call__(self, input_A, input_B, F2_0):
-        assert len(input_A) == self.nin_data, "Input must be {self.nin_data} bits long"
-        assert len(input_B) == self.nin_data, "Input must be {self.nin_data} bits long"
-        assert len(F2_0) == self.nin_control, "Input must be {self.nin_control} bits long"
+        assert len(input_A) == self.nin_data, f"Input must be {self.nin_data} bits long"
+        assert len(input_B) == self.nin_data, f"Input must be {self.nin_data} bits long"
+        assert len(F2_0) == self.nin_control, f"Input must be {self.nin_control} bits long"
 
         invert_of_f0 = self.invert_gate_of_f0([F2_0[-1]])
         invert_of_f1 = self.invert_gate_of_f1([F2_0[-2]])
@@ -992,7 +995,12 @@ class Logic:
         self.enable_or_output = self.and_gate_of_enable_or([invert_of_f0, F2_0[1], F2_0[0]])
 
         output = []
-        # should use tri-buffer to replace if condition
+        
+        # FIXME (Hardware Physics Violation):
+        # In real silicon, ALL logic gates (AND, OR, XOR) evaluate simultaneously. 
+        # Their outputs are routed to a shared local bus through Tri-State Buffers.
+        # Software `if/elif` prevents the other gates from running. To be 100% physically 
+        # accurate, this should be replaced by 3 Tri-State Buffers feeding a mini DataBus.
         if self.enable_and_output:
             for idx, and_gate in enumerate(self.and_gates_of_input):
                 output.append(and_gate([input_A[idx], input_B[idx]]))
@@ -1000,6 +1008,7 @@ class Logic:
         elif self.enable_xor_output:
             for idx, xor_gate in enumerate(self.xor_gates_of_input):
                 output.append(xor_gate([input_A[idx], input_B[idx]]))
+                
         elif self.enable_or_output:
             for idx, or_gate in enumerate(self.or_gates_of_input):
                 output.append(or_gate([input_A[idx], input_B[idx]]))
@@ -1010,34 +1019,43 @@ class Logic:
         return output
     
 class Add_Subtract:
-    def __init__(self, nin_data = 8, nin_control = 2):
+    """
+    Simulates the Arithmetic sub-unit of the ALU.
+    Handles ADD, ADC (Add with Carry), SUB, and SBB (Subtract with Borrow).
+    """
+    def __init__(self, nin_data=8, nin_control=2):
         self.nin_data = nin_data
         self.nin_control = nin_control
 
         # ones' complement
         self.xor_gates_for_complements = [XOR() for _ in range(self.nin_data)]
 
-        # NBitsAccumulator
         self.adder = NBitAdderWithOverflow(self.nin_data)
 
         self.invert_gate_of_f0 = Inverter()
         self.and_gate_of_f0_CY_in = AND(2)
         self.and_gate_of_f0_f1 = AND(2)
-
         self.or_gate_of_CI = OR(2)
 
-        # This is a little different from the circuits shown in the book 
-        # in that the values of both CY In and CY Out are inverted for subtraction. (The entry in the lower-right corner of the table on page 322 should be CY_bar)
+        # NOTE: This implementation differs slightly from the circuit shown in the book.
+        # For subtraction operations, both Carry-In (CY_in) and Carry-Out (CY_out)
+        # are treated as inverted signals.
+        # In particular, the entry in the lower-right corner of the table on page 322
+        # should be interpreted as CY_bar (inverted carry) for subtract with borrow.
         self.xor_for_cy = XOR()
 
-    def __call__(self, input_A, input_B, F1_0, CY_In = 0):
+    def __call__(self, input_A, input_B, F1_0, CY_In=0):
         assert len(input_A) == self.nin_data, f"Input must be {self.nin_data} bits long"
         assert len(input_B) == self.nin_data, f"Input must be {self.nin_data} bits long"
         assert len(F1_0) == self.nin_control, f"Input must be {self.nin_control} bits long"
 
         invert_of_f0 = self.invert_gate_of_f0([F1_0[1]])
         invert_flag = F1_0[0]
-        CI_flag = self.or_gate_of_CI([self.and_gate_of_f0_CY_in([F1_0[1], self.xor_for_cy([CY_In, F1_0[0]])]), self.and_gate_of_f0_f1([invert_of_f0, F1_0[0]])])
+        
+        CI_flag = self.or_gate_of_CI([
+            self.and_gate_of_f0_CY_in([F1_0[1], self.xor_for_cy([CY_In, F1_0[0]])]), 
+            self.and_gate_of_f0_f1([invert_of_f0, F1_0[0]])
+        ])
         
         outputs_from_complements_of_one = []
         for idx, xor_gate in enumerate(self.xor_gates_for_complements):
@@ -1045,15 +1063,19 @@ class Add_Subtract:
         operand_B = outputs_from_complements_of_one
 
         overflow, sum_bits = self.adder(input_A, operand_B, CI_flag)
-        # print(f"CI: {CI_flag}, CO: {self.adder.get_carry_out()}")
+        
+        # Invert the physical Carry Out back into a logical Borrow Out
         carry_out = self.xor_for_cy([self.adder.get_carry_out(), F1_0[0]])
 
         return carry_out, sum_bits
-        
-            
-    
+
 class ALU:
-    def __init__(self, nin_data = 8, nin_control_signal = 3):
+    """
+    The full Arithmetic Logic Unit.
+    Combines the Logic unit, the Add/Sub unit, and the Flag Registers.
+    Routes data via an internal DataBus and Tri-State Buffers.
+    """
+    def __init__(self, nin_data=8, nin_control_signal=3):
         self.nin_data = nin_data
         self.nin_control = nin_control_signal
 
@@ -1062,8 +1084,7 @@ class ALU:
 
         self.enable_add_or_sub = 0
 
-        # just use 3 bits although use nin_data bits here
-        # flag[0]: Sign flag(S), flag[1]: Zero flag(Z), flag[2]: Carry flag(CY)
+        # flags[0]: Sign(S), flags[1]: Zero(Z), flags[2]: Carry(CY)
         self.flags_latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nin_data)
         self.result_latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nin_data)
 
@@ -1072,10 +1093,11 @@ class ALU:
         self.or_gate_of_invert_of_f2_other = OR()
         self.and_gate_of_cy_out_other = AND()
 
-        self.nor_gates_of_flags =  NOR(self.nin_data)
+        self.nor_gates_of_flags = NOR(self.nin_data)
 
         self.tri_add_sub = TriStateBuffer(self.nin_data)
-        self.data_bus = DataBus(num_buffers=3, nbits=self.nin_data) # input_A, add/sub output and logic output
+        # input_A, add/sub output and logic output
+        self.data_bus = DataBus(num_buffers=3, nbits=self.nin_data)
         self.tri_result = TriStateBuffer(self.nin_data)
 
         self.and_gate_of_f0_f1_f2 = AND()
@@ -1087,14 +1109,14 @@ class ALU:
         self.invert_used_in_zero_flag_0 = Inverter()
         self.or_used_in_zero_flag_0 = OR()
 
-    def read_flags(self,):
+    def read_flags(self):
         return self.flags_latch.getQ()[:3]
     
     def read_out(self, enable):
         assert enable in [0, 1], f"enable signal must be 0 or 1"
         return self.tri_result(self.result_latch.getQ(), enable)
 
-    # A comes from Acc of RA, B comes from out of data bus, output is send to data bus and acc (acc?) too. (page 345)
+    # A comes from Acc of RA, B comes from out of data bus, output is send to data bus and Acc too. (page 345)
     # below function according page 332
     def __call__(self, input_A, input_B, F2_0, clock):
         assert len(input_A) == self.nin_data, f"Input must be {self.nin_data} bits long"
@@ -1102,24 +1124,19 @@ class ALU:
         assert len(F2_0) == self.nin_control, f"Input must be {self.nin_control} bits long"
         assert clock in [0, 1], f"clock signal must be 0 or 1"
 
-        # finish enable of add/sub
         invert_of_f2 = self.invert_of_f2([F2_0[0]])
         self.enable_add_or_sub = invert_of_f2
-
         and_of_f1_f0 = self.and_gate_of_f0_f1([F2_0[1], F2_0[2]])
 
-        # finish enable acc
+        # NOTE (Hardware Physics): "The Hidden Subtraction"
+        # If F2, F1, F0 = 111, this is a COMPARE instruction.
+        # The ALU performs a subtraction to calculate the flags, but enables the 
+        # original Accumulator (Input A) to pass through to the result bus!
         self.enable_acc = self.and_gate_of_f0_f1_f2([and_of_f1_f0, F2_0[0]])
 
-        # finish add/sub and CY OUT flag
         or_of_and_invert_f2 = self.or_gate_of_invert_of_f2_other([invert_of_f2, and_of_f1_f0])
-        # flags current have 3 bits is meaningful: 
-        # flags[0]: sign flag, flags[1]: zero flag, flags[2]: carry flag
+        flags = self.flags_latch.getQ()
         """
-        The Carry flag should be set if the F2 signal is 0
-        (indicating an addition or subtraction operation) or F1 and F0 are 1, which
-        indicates a Compare operation. (How do you do this? Basically, it’s a subtraction.)
-
         But for a Compare operation, it’s also necessary to know if the result of
         the operation was zero, which indicates that the two bytes are equal to each
         other. This implies the need for another flag, called the Zero flag, which
@@ -1131,97 +1148,65 @@ class ALU:
         tive or positive. The flag is 1 if the number is negative and 0 if the number
         is positive.
         """
-        flags = self.flags_latch.getQ()
-        # CY in <- CY out and consider invert of F2(For the Compare operation, 
-        # Add/Sub module is performing a Subtract with Borrow because F1 and F0 are both 1. 
-        # For this reason, the CY In is set to 0 when a Compare operation is performed.)
+        # CY in is set to 0 during a Compare operation
         CY_IN = self.and_gate_cy_in([flags[2], invert_of_f2]) 
-        # Carry flag then circles back up to provide the CY In input of the Add/Sub module
         carry_out, sum_bits = self.add_and_subtract(input_A, input_B, F2_0[1:], CY_IN) 
         and_of_cy_out_or = self.and_gate_of_cy_out_other([carry_out, or_of_and_invert_f2])
-        # new flags, if this clock operation on logic, flags should keep same instead of update.
-        # update: zero bit and sign flag both influenced by add/sub, compare/acc and logic
-        # carry flag only influenced add/sub and compare
+        """
+        new flags, if this clock operation on logic, flags should keep same instead of update.
+        update: zero bit and sign flag both influenced by add/sub, compare/acc and logic
+        carry flag only influenced add/sub and compare
+        """
         new_flags = [0] * len(flags)
         new_flags[2] = and_of_cy_out_or
 
-        # finish output from all component
         output_of_logic = self.logic(input_A, input_B, F2_0)
         output_from_add_sub = self.tri_add_sub(sum_bits, self.enable_add_or_sub)
         output_from_acc = self.tri_acc(input_A, self.enable_acc)
         
-        # 1. Combine them on the bus. The Tri-State buffers ensure only the correct one has data!
+        # Combine them on the bus. Tri-State buffers ensure only one has data!
         final_alu_result = self.data_bus([output_from_acc, output_from_add_sub, output_of_logic])
         self.result_latch(final_alu_result, clock)
 
-        # 2. Calculate flags based on the FINAL combined bus data
-        # for compare op: 
-        #   1. if equal: zero flag is 1 and carry out flag is 0
-        #   2. if A < B: carry out is 1
-        #   3. if A > B: carry out is 0
-        #   for sign bit, now influenced by acc, i.e., input_A
-        # finish zero flag
+        # Zero Flag Logic
+        """
+        for compare op: 
+          1. if equal: zero flag is 1 and carry out flag is 0
+          2. if A < B: carry out is 1
+          3. if A > B: carry out is 0
+          for sign bit, now influenced by acc, i.e., input_A
+        """
         nor_from_add_sub = self.nor_gates_of_flags(sum_bits)
         and_used_in_zero_flag_0_ = self.and_used_in_zero_flag_0([nor_from_add_sub, or_of_and_invert_f2])
         nor_from_logic = self.nor_gates_of_flags(output_of_logic)
         and_used_in_zero_flag_1_ = self.and_used_in_zero_flag_1([nor_from_logic, self.invert_used_in_zero_flag_0([or_of_and_invert_f2])])
         new_flags[1] = self.or_used_in_zero_flag_0([and_used_in_zero_flag_0_, and_used_in_zero_flag_1_])
-        # finish sign flag
-        # sign bit influenced by input_A and add/sub
-        """
-        from gemini
-        Why this fails: In the Intel 8080, a Compare instruction performs a hidden subtraction ($A - B$) 
-        to calculate the flags. All flags (Zero, Carry, AND Sign) must reflect the result of that hidden subtraction.
-
-        but author say However, the Compare operation doesn't result in a new value saved in the Accumulator. 
-        For this reason, if a Compare operation is occurring, the A input is enabled with the tri-state 
-        buffer at the far left to be saved in the Latch at the bottom right.
-        and say:
-
-        The Compare operation is the same as the Subtract operation with the
-        important distinction that the result isn’t saved anywhere. Instead, the
-        Carry flag is saved.
-        But for a Compare operation, it’s also necessary to know if the result of
-        the operation was zero, which indicates that the two bytes are equal to each
-        other. This implies the need for another flag, called the Zero flag, which
-        must be saved along with the Carry flag.
-        While we’re at it, let’s add another flag, called the Sign flag. This flag is
-        set if the most significant bit of the result of an operation is 1. If the number
-        is in two’s complement, the Sign flag indicates whether the number is nega-
-        tive or positive. The flag is 1 if the number is negative and 0 if the number
-        is positive.
-        """
+        
+        # Sign Flag Logic (Determined by the MSB of the final bus result)
         new_flags[0] = final_alu_result[0]
-        # 3. Latch the results
+        
+        # Latch the results
         self.flags_latch(new_flags, clock)
 
-# ------------------------- end ch21 ----------------------------------
-# ------------------------- start ch22 ----------------------------------
 class TriStateBuffer:
     """
     Simulates a Tri-State Buffer for an 8-bit bus using pure logic gates.
     Instead of outputting 'None' when disabled, it forces the output to all 0s.
-    (PengChen:) use if condition and bool variable to simulate this buffer
-    so ugly, so gemini give me this implement.
     """
     def __init__(self, nbits=8):
         self.nbits = nbits
         self.and_gates = [AND(2) for _ in range(self.nbits)]
 
     def __call__(self, data_in, enable):
-        # If enable=1, 1 AND Data = Data. (Passes through)
-        # If enable=0, 0 AND Data = 0. (Blocks data, masking it to 0s)
-        
         output = []
         for i in range(self.nbits):
             output.append(self.and_gates[i]([data_in[i], enable]))
-            
         return output
     
 class DataBus:
     """ 
-    (PengChen:) be compatible class TriStateBuffer
-    written by gemini
+    Combines outputs from multiple Tri-State Buffers onto a single shared bus.
+    Simulated using massive OR gates.
     """
     def __init__(self, num_buffers, nbits=8):
         self.nbits = nbits
@@ -1235,16 +1220,16 @@ class DataBus:
         
         bus_result = []
         for i in range(self.nbits):
-            # If it is a list, slice it with [i]. If it is an int, just use the int directly!
             bits_for_this_wire = [
                 buf_out[i] if isinstance(buf_out, list) else buf_out 
                 for buf_out in list_of_buffer_outputs
             ]
-            # Shove all those bits into the giant OR gate
             bus_result.append(self.or_gates[i](bits_for_this_wire))
             
         return bus_result
-    
+
+# ------------------------- end ch21 ----------------------------------
+# ------------------------- start ch22 ----------------------------------    
 class RegisterArray:
     """
     implement like: https://codehiddenlanguage.com/Chapter22/
