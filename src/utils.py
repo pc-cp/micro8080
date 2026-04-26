@@ -1232,11 +1232,15 @@ class DataBus:
 # ------------------------- start ch22 ----------------------------------    
 class RegisterArray:
     """
-    implement like: https://codehiddenlanguage.com/Chapter22/
-    and page on book: 344
+    Simulates the internal Register Array of the CPU.
+    Based on Charles Petzold's 'Code' (Chapter 22, Page 344).
+    
+    Contains the 8-bit registers: A (Accumulator), B, C, D, E, H, and L.
+    NOTE: Index 6 is intentionally missing (Select 110) because it is traditionally 
+    used to trigger a read/write directly to Memory (M) instead of a register.
     """
-    def __init__(self, nbits = 8):
-        self.nbits = nbits # bits of latch
+    def __init__(self, nbits=8):
+        self.nbits = nbits 
         self.decoder_clock = Decoder_3_8()
         self.decoder_enable = Decoder_3_8()
 
@@ -1248,14 +1252,15 @@ class RegisterArray:
         self.latch_H = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
         self.latch_L = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
         
+        # 3-bit Selection Mapping
         self.latchs = { 0: self.latch_B, 
                         1: self.latch_C,
                         2: self.latch_D,
                         3: self.latch_E,
                         4: self.latch_H,
                         5: self.latch_L,
-                        # watch out, 6: Memory
-                        7: self.latch_A,}
+                        # WATCH OUT: 6 is Memory (M)
+                        7: self.latch_A}
         
         self.tri_A = TriStateBuffer(self.nbits)
         self.tri_B = TriStateBuffer(self.nbits)
@@ -1271,13 +1276,12 @@ class RegisterArray:
                         3: self.tri_E,
                         4: self.tri_H,
                         5: self.tri_L,
-                        # watch out, 6: Memory
-                        7: self.tri_A,}
+                        # WATCH OUT: 6 is Memory (M)
+                        7: self.tri_A}
 
         self.data_bus = DataBus(num_buffers=len(self.latchs), nbits=self.nbits)
+        
         self.addr_nbits = 16
-        # num_buffers need change after
-        self.addr_bus = DataBus(num_buffers=7, nbits=self.addr_nbits)
         self.tri_hl = TriStateBuffer(self.addr_nbits)
 
         self.clock_idx = [0] * (len(self.latchs) + 1) 
@@ -1285,122 +1289,126 @@ class RegisterArray:
         self.or_gate_for_acc_clk = OR()
         self.or_gate_for_acc_read = OR()
 
-        # self.inst_latch1 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
-        # self.inst_latch2 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
-        # self.enable_inst_latch2 = 0
-        # self.inst_latch3 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
-
-        # page 352: 
+        # Page 352: Gates to handle the 16-bit H-L register pair selection
         self.invert_gate_hl_select = Inverter()
         self.or_gate_h_clk = OR()
         self.or_gate_l_clk = OR()
     
     def __call__(self, data, select, clock, addr, hl_select, hl_clock):
-        # select is SI2, SI1, SI0 in page 357
+        """
+        Writes data to a specific register based on a 3-bit select code.
+        select is SI2, SI1, SI0 (Page 357).
+        """
         assert len(data) == self.nbits, f"Inputs must be {self.nbits} bits long"
-        assert len(select) == 3, f"selects must be 3 bits long"
+        assert len(select) == 3, "selects must be 3 bits long"
         assert clock in [0, 1], "clock signal must be 0 or 1"
 
-        # select is [i0, i1, i2]
-        # latch_idx will let latch_idx[i0*4+i1*2+i2] = 1, other is 0
-        # example [1, 1, 1]
-        # latch_idx is [0, 0, 0, 0, 0, 0, 0, 1]
-        # that suppose clock/enable is 1, otherwise latch_idx is all zeros
-        
+        # The 3-to-8 decoder routes the single clock pulse to the correct register
         clock_idx = self.decoder_clock(select, enable=clock)
         assert (sum(clock_idx) == 1 and clock == 1) or ((sum(clock_idx) == 0 and clock == 0)), "FATAL: Check Decoder_3_8 input/output"
-        print(f"clock_idx: {clock_idx}, select: {select}, data: {data}")
 
         duplicate_datas = self.duplicate_data_to_each_latch(data)
-        # clock_idx[3] = self.or_gate_h_clk([clock_idx[3], HL_clock])
-        # clock_idx[2] = self.or_gate_l_clk([clock_idx[2], HL_clock])
         
-        # TODO(PengChen:) we need add tri-buff before latch instead of use if condition
+        # FIXME (Hardware Physics): 
+        # In hardware, Tri-State buffers would block data from entering the wrong latches.
+        # Software uses `if` statements here. To be 100% physically accurate, we should 
+        # route the Data Bus through Tri-State Buffers before hitting the latches.
         if hl_select:
-            duplicate_datas[4] = addr[:8] # to H latch
-            duplicate_datas[5] = addr[8:] # to L latch
-            # need this clear 0? we want hl_clock control instead of clock, they are independent.
+            duplicate_datas[4] = addr[:8] # Route to H latch
+            duplicate_datas[5] = addr[8:] # Route to L latch
+            
+            # hl_clock is independent of the main register clock
             clock_idx = len(self.clock_idx) * [0]
             clock_idx[4] = self.or_gate_h_clk([clock_idx[4], hl_clock])
             clock_idx[5] = self.or_gate_l_clk([clock_idx[5], hl_clock])
             assert (sum(clock_idx) == 2 and hl_clock == 1) or ((sum(clock_idx) == 0 and hl_clock == 0)), "FATAL: Check hl_select and hl_clock"
+            
         self.clock_idx = clock_idx
-
         self.write_helper(duplicate_datas, clock_idx)
 
     def duplicate_data_to_each_latch(self, data):
+        """Hardware implicitly sends the bus data to all latches simultaneously."""
         datas = []
         for _ in range(len(self.latchs) + 1):
             datas.append(data)
         return datas
 
     def write_accumulator(self, data, clk):
-        # clk is Acc Clock in page 357
-        # page 347 have detailed circuit.
+        """
+        clk is 'Acc Clock' (Page 357).
+        Page 347 has the detailed circuit. The Accumulator often gets special 
+        direct writes from the ALU outside of the standard register selection.
+        """
         self.clock_idx = len(self.clock_idx) * [0]
         self.clock_idx[7] = self.or_gate_for_acc_clk([clk, self.clock_idx[7]])
         assert (sum(self.clock_idx) == 1 and clk == 1) or ((sum(self.clock_idx) == 0 and clk == 0)), "FATAL: write_accumulator"
         self.write_helper(self.duplicate_data_to_each_latch(data), self.clock_idx)
         
     def write_helper(self, datas, clock_idx):
-        print(f"datas: {datas}")
         for idx, clk in enumerate(clock_idx):
-            if idx == 6: # select is [1, 1, 0]
+            if idx == 6: # Watch out: index 6 is [1, 1, 0] (Memory), skip local latches
                 continue
-            print(f"idx:{idx}, clk: {clk}")
             self.latchs[idx](datas[idx], clk)
 
     def read_hl(self, enable_hl):
+        """Outputs the 16-bit H-L pair combined onto the 16-bit address bus."""
         return self.tri_hl(self.latch_H.getQ() + self.latch_L.getQ(), enable_hl)
 
     def read_accumulator(self, enable=1):
-        # TODO(PengChen): enable default is 1, so input_A of ALU can directly read accumulator?
-        # enable is Acc Enable in page 357
-        # page 347 have detailed circuit.
+        """
+        enable is 'Acc Enable' (Page 357).
+        Page 347 has the detailed circuit. Used to pipe Accumulator A directly to the ALU.
+        """
         self.enable_idx = len(self.enable_idx) * [0]
         self.enable_idx[7] = self.or_gate_for_acc_read([enable, self.enable_idx[7]])
         assert (sum(self.enable_idx) == 1 and enable == 1) or ((sum(self.enable_idx) == 0 and enable == 0)), "FATAL: read_accumulator"
         return self.read_helper(self.enable_idx)
 
     def read_register(self, select, enable):
-        # select is SO2, SO1, SO0 in page 357
-        assert len(select) == 3, f"selects must be 3 bits long"
+        """
+        select is SO2, SO1, SO0 (Page 357).
+        Uses a 3-to-8 decoder to open exactly ONE Tri-State buffer onto the data bus.
+        """
+        assert len(select) == 3, "selects must be 3 bits long"
         assert enable in [0, 1], "enable signal must be 0 or 1"
         
         enable_idx = self.decoder_enable(select, enable=enable)
         assert (sum(enable_idx) == 1 and enable == 1) or ((sum(enable_idx) == 0 and enable == 0)), "FATAL: Check Decoder_3_8 input/output"
+        
         self.enable_idx = enable_idx
         return self.read_helper(enable_idx)
     
     def read_helper(self, enable_idx):
         list_of_buffer_outputs = []
         for idx, enab in enumerate(enable_idx):
-            if idx == 6: # select is [1, 1, 0]
+            if idx == 6: # Watch out: index 6 is [1, 1, 0] (Memory)
                 continue
-            print(f"idx: {idx}, data: {self.tris[idx](self.latchs[idx].getQ(), enab)}")
             list_of_buffer_outputs.append(self.tris[idx](self.latchs[idx].getQ(), enab))
 
         return self.data_bus(list_of_buffer_outputs)
 
 class InstLatch:
-    # circuit on page 347 and 353()
-    def __init__(self, nbits = 8):
+    """
+    Holds the multi-byte instruction fetched from RAM.
+    Circuit on Pages 347 and 353.
+    """
+    def __init__(self, nbits=8):
         self.nbits = nbits
+        # Latch 1: Holds Opcode
         self.inst_latch1 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        # Latch 2: Holds Low Byte of Data/Address
         self.inst_latch2 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
+        # Latch 3: Holds High Byte of Data/Address
         self.inst_latch3 = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.nbits)
 
         self.inst_latchs = {
-            1:self.inst_latch1,
-            2:self.inst_latch2,
-            3:self.inst_latch3,
+            1: self.inst_latch1,
+            2: self.inst_latch2,
+            3: self.inst_latch3,
         }
 
         self.tri_2 = TriStateBuffer(self.nbits)
         self.tri_2_3 = TriStateBuffer(self.nbits * 2)
-        
-    def __call__(self, *args, **kwds):
-        pass
         
     def write_latch1(self, data, clock_idx):
         self.write_helper(data, 1, clock_idx)
@@ -1414,33 +1422,46 @@ class InstLatch:
     def write_helper(self, data, latch_idx, clock_idx):
         self.inst_latchs[latch_idx](data, clock_idx)
 
-    def read_latch1(self,):
+    def read_latch1(self):
+        """Reads the Opcode."""
         return self.inst_latch1.getQ()
 
-    # send output to data bus
     def read_latch2(self, enable):
-        # like ADI, latch2 must therefore be enabled on the data bus.
+        """
+        Sends Latch 2 to the Data Bus.
+        Example: For an ADI (Add Immediate) instruction, Latch 2 holds the 
+        immediate math value and must be enabled onto the data bus.
+        """
         return self.tri_2(self.inst_latch2.getQ(), enable)
 
-    # send output to addr bus
     def read_latch2_3(self, enable_2_3):
-        # like STA or LDA, latch2 and 3 must also be connected to the address bus through a tri-buffer.
-        # the Intel 8080 uses "Little-Endian" byte order. example in page 377
-        # Latch 3 is the High Byte (MSB), Latch 2 is the Low Byte (LSB)!
+        """
+        Sends Latches 2 and 3 to the 16-bit Address Bus.
+        Example: For STA (Store Accumulator) or LDA (Load Accumulator), 
+        Latches 2 and 3 form a 16-bit RAM address.
+        
+        NOTE (Hardware Physics): Little-Endian Byte Order! (Page 377)
+        The Intel 8080 stores the least significant byte first. Therefore, 
+        Latch 3 is the High Byte (MSB) and Latch 2 is the Low Byte (LSB).
+        """
         return self.tri_2_3(self.inst_latch3.getQ() + self.inst_latch2.getQ(), enable_2_3)
 
 class ProgramCounter:
-    # circuit on page 348
+    """
+    16-Bit Program Counter. Circuit on Page 348.
+    Holds the address of the currently executing instruction.
+    """
     def __init__(self):
         self.addr_bits = 16
         self.latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.addr_bits)
         self.tri = TriStateBuffer(self.addr_bits)
 
     def SetMaxAddr(self):
+        """Sets PC to 0xFFFF. Used right before booting so the first tick rolls over to 0x0000."""
         self.latch.SetMaxData()
 
     def Reset(self):
-        # set the contents of the latch to all 0
+        """Sets the contents of the latch to 0x0000."""
         addrs = [0] * self.addr_bits
         self.latch.SetData(addrs)
 
@@ -1454,39 +1475,44 @@ class ProgramCounter:
         self.latch(datas=addr, clk=clk)
 
 class IncrementerDecrementer:
+    """
+    The 16-bit Incrementer/Decrementer (Pages 350 - 351).
+    Used to quickly add 1 or subtract 1 from the Program Counter or Stack Pointer.
+    """
     def __init__(self):
-        """ 
-        The Incrementer / Decrementer (pages 350 – 351)
-        refer: https://codehiddenlanguage.com/Chapter22/
-        """
         self.addr_bits = 16
         self.xor_first_level = [XOR() for _ in range(self.addr_bits)]
         self.xor_second_level = [XOR() for _ in range(self.addr_bits)]
         self.and_gates = [AND() for _ in range(self.addr_bits)]
-        self.v = 1
-
+        
         self.latch = NBitsEdgeTriggeredDTypeFlipFlopWithPresetAndClear(self.addr_bits)
         self.tri = TriStateBuffer(self.addr_bits)
         self.or_gate = OR()
 
     def readAddr(self, dec_enable, inc_enable):
+        """
+        NOTE (Hardware Physics): Ripple Carry Logic
+        If inc_enable = 1, it adds 1.
+        If dec_enable = 1, the XOR gates act as 1's complement inverters, 
+        effectively subtracting 1 via two's complement math.
+        """
         read_addrs = self.latch.getQ()
         
-        v = self.v
+        v = 1 # Carry-in bit used to initiate the increment/decrement
         output_from_Inc_Dec = []
+        
+        # Ripple from LSB to MSB
         for idx, addr in enumerate(reversed(read_addrs)):
             output_from_Inc_Dec.append(self.xor_second_level[idx]([addr, v]))
             v = self.and_gates[idx]([self.xor_first_level[idx]([dec_enable, addr]), v])
 
-        # now LSB is idx 0, so we should reverse, let MSB is idx 0
+        # Reverse the list so MSB is back at index 0
         output_from_Inc_Dec = list(reversed(output_from_Inc_Dec))
 
         return self.tri(output_from_Inc_Dec, self.or_gate([dec_enable, inc_enable]))
 
     def __call__(self, addrs, clock):
         self.latch(addrs, clock)
-        
-    
 
 # ------------------------- end ch22 ----------------------------------
 
