@@ -1515,9 +1515,12 @@ class IncrementerDecrementer:
         self.latch(addrs, clock)
 
 # ------------------------- end ch22 ----------------------------------
-
+# ------------------------- start ch23 ----------------------------------    
 class Counter4Bit:
-    """A Ripple Counter that counts"""
+    """
+    A 4-Bit Ripple Counter.
+    Used by the Control Unit to track the current Machine Cycle (1 to 6).
+    """
     def __init__(self,):
         self.nbits = 4
         self.flipflops = [EdgeTriggeredDTypeFlipFlopWithPresetAndClear() for _ in range(self.nbits)]
@@ -1528,24 +1531,25 @@ class Counter4Bit:
         return list(reversed(qs))
     
     def SetMaxAddr(self):
+        """
+        Forces the counter to 1111 (15).
+        NOTE: 'present' is used here as 'preset' to force the flip-flops to 1.
+        """
         # 1. Assert the present wire (1) and let the hardware loop stabilize it!
         self.__call__(clk=0, clear_wire=0, present=1)
         
         # 2. De-assert the present wire (0) so the counter is ready to count again.
         self.__call__(clk=0, clear_wire=0, present=0)
-        # for ff in self.flipflops:
-            # ff([0, 0, 1, 0]) # D = 0, CLK = 0, PRE = 1, CLR = 0
 
     def Clear(self):
+        """Asynchronously clears the counter to 0000."""
         # 1. Assert the Clear wire (1) and let the hardware loop stabilize it!
         self.__call__(clk=0, clear_wire=1, present=0)
         
         # 2. De-assert the Clear wire (0) so the counter is ready to count again.
         self.__call__(clk=0, clear_wire=0, present=0)
-        # for ff in self.flipflops:
-            # ff([0, 0, 0, 1]) # D = 0, CLK = 0, PRE = 0, CLR = 1
 
-    def __call__(self, clk = 0, clear_wire = 0, present = 0):
+    def __call__(self, clk=0, clear_wire=0, present=0):
         # The hardware stabilization loop
         while True:
             # 1. Take a snapshot of the current state of the ff
@@ -1555,7 +1559,7 @@ class Counter4Bit:
             current_clk = clk
             for ff in self.flipflops:
                 data = ff.getQ_bar()
-                # Pass Data, Clock, Preset(0), and clear_p370 wire (0)
+                # Pass Data, Clock, Preset (mapped to 'present'), and clear_wire
                 q, q_bar = ff([data, current_clk, present, clear_wire])
                 current_clk = q_bar
 
@@ -1571,6 +1575,12 @@ class Counter4Bit:
     
 
 class ControlSignal:
+    """
+    The Master Control Unit of the CPU.
+    Decodes the 8-bit Instruction Opcode and the 4-bit Cycle Counter to generate 
+    dozens of precise enable and clock pulses across the entire motherboard.
+    Follows the exact wiring schematics from Chapter 23 (Pages 366-376).
+    """
     def __init__(self):
         self.nbits_of_latch = 8
 
@@ -1606,10 +1616,9 @@ class ControlSignal:
 
     def __call__(self, cycle_clk, pulse, reset, latch1):
         self.my_counter(cycle_clk)
-        # print(f"self.my_counter: {self.my_counter.getQs()}")
         output_of_decoder = self.decoder(self.my_counter.getQs())
-        # print(f"cycle_clk: {cycle_clk}, output_of_decoder: {output_of_decoder}")
         assert len(latch1) == self.nbits_of_latch
+
 # page 366
 # --------------------------------------------------------------------------------------------------
         output_of_c7_c6_p366 = self.decoder_2_4_of_latch_1(latch1[:2])
@@ -1648,11 +1657,10 @@ class ControlSignal:
         fetch_3_byte_p367 = self.or_gate_2_in([lda_p366, sta_p366])
         fetch_1_byte_invert_p367 = self.or_gate_2_in([fetch_2_byte_p367, fetch_3_byte_p367])
         fetch_1_byte_p367 = self.invert_gate([fetch_1_byte_invert_p367])
+        
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
         # +++++ UPDATE START: FIXING 2-CYCLE EXECUTE FOR INX/DCX HL           +++++
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        # Previously: execute_2_cycle_p367 = self.or_gate_3_in([adi_data_p366, add_r_p367, add_M_p367])
-        
         # We must chain OR gates to include INX HL and DCX HL in the 2-cycle group!
         tmp_math_exec_2 = self.or_gate_3_in([adi_data_p366, add_r_p367, add_M_p367])
         execute_2_cycle_p367 = self.or_gate_3_in([tmp_math_exec_2, inx_hl_p366, dcx_hl_p366])
@@ -1666,40 +1674,40 @@ class ControlSignal:
         fetch_cycle_2_out_p370 = self.and_gate_2_in([output_of_decoder[2], fetch_1_byte_invert_p367])
         fetch_cycle_3_out_p370 = self.and_gate_2_in([output_of_decoder[4], fetch_3_byte_p367])
         pc_increment_p370 = self.or_gate_3_in([self.and_gate_2_in([output_of_decoder[3], fetch_1_byte_invert_p367]), output_of_decoder[1], self.and_gate_2_in([output_of_decoder[5], fetch_3_byte_p367])])
+        
         # EC1 on page 373
         exec_cycle_1_out_p370 = self.or_gate_3_in([self.and_gate_2_in([output_of_decoder[2], fetch_1_byte_p367]), self.and_gate_2_in([output_of_decoder[4], fetch_2_byte_p367]), self.and_gate_2_in([output_of_decoder[6], fetch_3_byte_p367])])
 
         tmp_exec_cycle_2_p370 = self.or_gate_3_in([self.and_gate_2_in([output_of_decoder[3], fetch_1_byte_p367]), self.and_gate_2_in([output_of_decoder[5], fetch_2_byte_p367]), self.and_gate_2_in([output_of_decoder[7], fetch_3_byte_p367])])
+        
         # EC2 on page 373
         exec_cycle_2_out_p370 = self.and_gate_2_in([tmp_exec_cycle_2_p370, execute_2_cycle_p367])
-        # print(f"tmp_exec_cycle_2_p370: {tmp_exec_cycle_2_p370}, execute_2_cycle_p367: {execute_2_cycle_p367}")
+        
         tmp1_reset_p370 = self.or_gate_3_in([self.and_gate_2_in([output_of_decoder[4], fetch_1_byte_p367]), self.and_gate_2_in([output_of_decoder[6], fetch_2_byte_p367]), self.and_gate_2_in([output_of_decoder[8], fetch_3_byte_p367])])
         tmp2_reset_p370 = self.or_gate_2_in([self.and_gate_2_in([tmp_exec_cycle_2_p370, execute_1_cycle_p367]), self.and_gate_2_in([execute_2_cycle_p367, tmp1_reset_p370])])
         clear_p370 = self.or_gate_2_in([reset, tmp2_reset_p370])
 
         if clear_p370:
             """
+            NOTE (Hardware Physics Optimization):
             Instead of clearing the counter to 0000 on reset, 
             we must pre-set it to 1111 (the maximum value). 
             This way, when the very first rising edge of the clock hits, 
             the counter "rolls over" from 1111 to 0000. 
             This perfectly locks the CPU into Fetch 1 for the first cycle!
             """
-            self.my_counter.SetMaxAddr() # clear_p370 0 and output[0] = 1 -> fetch cycle 1 next cycle
-            # print(f"self.my_counter: {self.my_counter.getQs()}")
+            self.my_counter.SetMaxAddr() 
+            
 # page 372 first part
 # --------------------------------------------------------------------------------------------------
         or_of_fetch_p372 = self.or_gate_3_in([fetch_cycle_1_out_p370, fetch_cycle_2_out_p370, fetch_cycle_3_out_p370])
         program_counter_enable_p372 = or_of_fetch_p372
-        # here input and enable signal is same for tri-buffer
+        
         # ATTENTION: maybe merge with other component can enable this.
-        # tri_buffer is unnecessary, because enable and data is same, if data is 0, enable is 0 -> 0, if data is 1, enable is 1 -> 1
-        # ram_data_out_enable_fetch_phrase_p372 = self.tri_buffer(or_of_fetch_p372, or_of_fetch_p372)[0]
+        # tri_buffer is unnecessary, because enable and data is same.
         ram_data_out_enable_fetch_phrase_p372 = or_of_fetch_p372
 
         input_of_inc_dec_clk_p372 = self.and_gate_2_in([or_of_fetch_p372, pulse])
-        # ATTENTION: maybe merge with other component can enable this.
-        # inc_dec_clk_fetch_phrase_p372 = self.tri_buffer(input_of_inc_dec_clk_p372, input_of_inc_dec_clk_p372)[0]
         inc_dec_clk_fetch_phrase_p372 = input_of_inc_dec_clk_p372
 
         instru_latch_1_clk_p372 = self.and_gate_2_in([fetch_cycle_1_out_p370, pulse])
@@ -1707,13 +1715,9 @@ class ControlSignal:
         instru_latch_3_clk_p372 = self.and_gate_2_in([fetch_cycle_3_out_p370, pulse])
 # page 372 second part
 # --------------------------------------------------------------------------------------------------
-        # ATTENTION: maybe merge with other component can enable this.
-        # increment_enable_fetch_phrase_p372 = self.tri_buffer(pc_increment_p370, pc_increment_p370)[0]
         increment_enable_fetch_phrase_p372 = pc_increment_p370
         
         input_of_program_counter_clk_fetch_phrase_p372 = self.and_gate_2_in([pc_increment_p370, pulse])
-        # ATTENTION: maybe merge with other component can enable this.
-        # program_counter_clk_fetch_phrase_p372 = self.tri_buffer([input_of_program_counter_clk_fetch_phrase_p372, input_of_program_counter_clk_fetch_phrase_p372])[0]
         program_counter_clk_fetch_phrase_p372 = input_of_program_counter_clk_fetch_phrase_p372
 
 # page 373 first part
@@ -1722,13 +1726,12 @@ class ControlSignal:
         execute_pulse_2_decode_phrase_p373 = self.and_gate_2_in([exec_cycle_2_out_p370, pulse])
 # page 373 second part
 # --------------------------------------------------------------------------------------------------
-        # this halt output will goes to the circuit with the oscillator
+        # this halt output will go to the circuit with the oscillator
         halt_exec_phrase_p373 = self.and_gate_2_in([hlt_p367, execute_pulse_1_decode_phrase_p373])
 
 # page 374
 # --------------------------------------------------------------------------------------------------
 # addr bus
-        # ATTENTION: maybe merge with other component can enable this.
         hl_enable_addr_bus_exec_phrase_1_p374, inst_latch2_3_enable_addr_bus_exec_phrase_1_p374 = self.tri_buffer_2_in([self.bus1_in_addr_bus_execute([move_r_M_p367, 
                                                                         move_M_r_p367,
                                                                         mvi_M_data_p367,
@@ -1736,20 +1739,16 @@ class ControlSignal:
                                                                         inx_hl_p366,
                                                                         dcx_hl_p366])[0], self.bus2_in_addr_bus_execute([lda_p366,
                                                                                                               sta_p366])[0]], exec_cycle_1_out_p370)
-        # ATTENTION: maybe merge with other component can enable this.
         inc_dec_clk_enable_addr_bus_exec_phrase_1_p374 = self.tri_buffer_1_in([self.bus2_in_addr_bus_execute([inx_hl_p366, 
                                                                            dcx_hl_p366])[0]], execute_pulse_1_decode_phrase_p373)[0]
-        # ATTENTION: maybe merge with other component can enable this.
+                                                                           
         hl_select_enable_addr_bus_exec_phrase_2_p374, increment_enable_addr_bus_exec_phrase_2_p374, dec_enable_addr_bus_exec_phrase_2_p374 = self.tri_buffer_3_in([self.bus2_in_addr_bus_execute([inx_hl_p366, 
                                                                            dcx_hl_p366])[0], inx_hl_p366, dcx_hl_p366], exec_cycle_2_out_p370)
-        # ATTENTION: maybe merge with other component can enable this.
+                                                                           
         hl_clk_addr_bus_exec_phrase_2_p374 = self.tri_buffer_1_in([self.bus2_in_addr_bus_execute([inx_hl_p366, 
                                                                       dcx_hl_p366])[0]], execute_pulse_2_decode_phrase_p373)[0]
-        # print(f"exec_cycle_1_out_p370: {exec_cycle_1_out_p370}, execute_pulse_1_decode_phrase_p373: {execute_pulse_1_decode_phrase_p373}")
-        # print(f"exec_cycle_2_out_p370: {exec_cycle_2_out_p370}, execute_pulse_2_decode_phrase_p373: {execute_pulse_2_decode_phrase_p373}")
 # page 375
 # --------------------------------------------------------------------------------------------------
-        # ATTENTION: maybe merge with other component can enable this.
         ra_enable_data_bus_exec_phrase_1_p375, ram_data_out_enable_data_bus_exec_phrase_1_p375, inst_latch2_enable_data_bus_exec_phrase_1_p375, acc_enable_data_bus_exec_phrase_1_p375 = self.tri_buffer_4_in([self.bus1_in_data_bus_execute([move_r_r_p367,
                                                                                                                               move_M_r_p367,
                                                                                                                               add_r_p367,
@@ -1762,7 +1761,7 @@ class ControlSignal:
                                                                                                                               mvi_M_data_p367,
                                                                                                                               adi_data_p366,
                                                                                                                               ])[0], sta_p366], exec_cycle_1_out_p370)
-        # ATTENTION: maybe merge with other component can enable this.
+        
         ra_clk_data_bus_exec_phrase_1_p375, ram_write_enable_data_bus_exec_phrase_1_p375, alu_clk_data_bus_exec_phrase_1_p375, acc_clk_data_bus_exec_phrase_1_p375 = self.tri_buffer_4_in([self.bus1_in_data_bus_execute([move_r_r_p367,
                                                                                                 move_r_M_p367,
                                                                                                 mvi_r_data_p367,
@@ -1778,31 +1777,34 @@ class ControlSignal:
         
 # page 376
 # --------------------------------------------------------------------------------------------------
-        # ATTENTION: maybe merge with other component can enable this.
         alu_enable_data_bus_exec_phrase_2_p376 = self.tri_buffer_1_in([self.bus1_in_data_bus_execute([add_r_p367,
                                                                          add_M_p367,
                                                                          adi_data_p366,
                                                                          ])[0]], exec_cycle_2_out_p370)[0]
-        # ATTENTION: maybe merge with other component can enable this.
+                                                                         
         acc_clk_data_bus_exec_phrase_2_p376 = self.tri_buffer_1_in([self.bus1_in_data_bus_execute([add_r_p367,
                                                                        add_M_p367,
                                                                        adi_data_p366,
                                                                        ])[0]], execute_pulse_2_decode_phrase_p373)[0]
 
-        # FIX: Combine signals that are triggered in multiple places using an OR gate!
-        # (Apply this OR logic to any other wires you calculated twice)
-        # this happen on insruct fetch and data in phrase 1
+        # =========================================================================================
+        # NOTE (Hardware Bus Arbitration): 
+        # Because we have multiple instruction phases (Fetch vs. Execute 1 vs. Execute 2) trying 
+        # to drive the EXACT same physical wires (like the RAM Data Enable or ACC Clock), 
+        # we MUST use OR gates to safely combine them so they don't short-circuit.
+        # =========================================================================================
+        
+        # Happens on instruct fetch and data in phrase 1
         final_ram_data_out_enable = self.or_gate_2_in([ram_data_out_enable_fetch_phrase_p372, ram_data_out_enable_data_bus_exec_phrase_1_p375])
-        # happen on instruct fetch and addr bus exec phrase 1
+        
+        # Happens on instruct fetch and addr bus exec phrase 1
         final_inc_dec_clk = self.or_gate_2_in([inc_dec_clk_fetch_phrase_p372, inc_dec_clk_enable_addr_bus_exec_phrase_1_p374])
-        # happen on instruct fetch and addr bus exec phrase 2
+        
+        # Happens on instruct fetch and addr bus exec phrase 2
         final_increment_enable = self.or_gate_2_in([increment_enable_fetch_phrase_p372, increment_enable_addr_bus_exec_phrase_2_p374])
-        # happen on data bus phrase 1 for LDA and phrase 2 for ADD r, ADD M, and ADI Data
+        
+        # Happens on data bus phrase 1 for LDA and phrase 2 for ADD r, ADD M, and ADI Data
         final_acc_clk = self.or_gate_2_in([acc_clk_data_bus_exec_phrase_1_p375, acc_clk_data_bus_exec_phrase_2_p376])
-        # l think maybe l will loss some enable or clock to get final result use or gate because circuit is so messy.
-        # l try my best to double check. hope AI can help me further check whether have duplicate enable/ clock to merge get
-        # final result.
-
 
         # Pack the Control Bus ribbon cable!
         control_bus = {
@@ -1837,8 +1839,11 @@ class ControlSignal:
         }
         return control_bus   
 
-
 class BasicTiming:
+    """
+    Generates the master clock and pulse signals for the CPU.
+    Handles HALT and RESET interruption signals.
+    """
     def __init__(self):
         self.edge_flipflop0 = EdgeTriggeredDTypeFlipFlopWithPresetAndClear()
         self.edge_flipflop1 = EdgeTriggeredDTypeFlipFlopWithPresetAndClear()
@@ -1857,28 +1862,27 @@ class BasicTiming:
         return self.pulse
     
     def __call__(self, clock, reset=0, halt=0):
+        # Hardware interrupt: Instantly clear timing flip-flops
         if reset == 1:
-            self.edge_flipflop0.Reset() # clear_p370 
+            self.edge_flipflop0.Reset() 
             self.edge_flipflop1.Reset()
             self.edge_flipflop2.Reset()
-            return ;
+            return 
         
+        # Halt flag flips FF0 to block the incoming oscillator clock
         self.edge_flipflop0([self.edge_flipflop0.getQ_bar(), halt])
-
         clock = self.and_gate0([self.edge_flipflop0.getQ_bar(), clock])
 
         not_clk = self.invert1([clock])
 
-        # while True:
-        #     old_q1, old_q_bar1 = self.edge_flipflop1.getQ(), self.edge_flipflop1.getQ_bar()
-        #     old_q2, old_q_bar2 = self.edge_flipflop2.getQ(), self.edge_flipflop2.getQ_bar()
-
+        # Frequency dividing and pulse generation logic
         self.edge_flipflop1([self.edge_flipflop1.getQ_bar(), clock])
         self.edge_flipflop2([self.edge_flipflop1.getQ(), not_clk])
+        
         clk_input_to_counter = self.edge_flipflop1.getQ()
         pulse = self.and_gate([self.edge_flipflop1.getQ_bar(), self.edge_flipflop2.getQ()])
+        
         self.cycle_clock = clk_input_to_counter
         self.pulse = pulse
-        # return [clk_input_to_counter, pulse]
 
-        
+# ------------------------- end ch23 ----------------------------------
