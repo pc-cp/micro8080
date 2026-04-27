@@ -134,3 +134,6 @@ The simulator tracks the Program Counter (PC), Address Bus, Data Bus, and the ac
 
 ----------------------------
 If you find this project interesting, feel free to open an issue or submit a pull request. I'd love to learn together!
+
+## License
+MIT
