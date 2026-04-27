@@ -1290,11 +1290,10 @@ class RegisterArray:
         self.or_gate_for_acc_read = OR()
 
         # Page 352: Gates to handle the 16-bit H-L register pair selection
-        self.invert_gate_hl_select = Inverter()
+        # self.invert_gate_hl_select = Inverter()
         self.or_gate_h_clk = OR()
         self.or_gate_l_clk = OR()
-    
-    def __call__(self, data, select, clock, addr, hl_select, hl_clock):
+    def __call__(self, data, select, clock, addr, hl_select, hl_clock, acc_clk=0):
         """
         Writes data to a specific register based on a 3-bit select code.
         select is SI2, SI1, SI0 (Page 357).
@@ -1318,10 +1317,12 @@ class RegisterArray:
             duplicate_datas[5] = addr[8:] # Route to L latch
             
             # hl_clock is independent of the main register clock
-            clock_idx = len(self.clock_idx) * [0]
+            # clock_idx = len(self.clock_idx) * [0]
             clock_idx[4] = self.or_gate_h_clk([clock_idx[4], hl_clock])
             clock_idx[5] = self.or_gate_l_clk([clock_idx[5], hl_clock])
             assert (sum(clock_idx) == 2 and hl_clock == 1) or ((sum(clock_idx) == 0 and hl_clock == 0)), "FATAL: Check hl_select and hl_clock"
+        # The physical OR gate for the Accumulator Clock!
+        clock_idx[7] = self.or_gate_for_acc_clk([clock_idx[7], acc_clk])
             
         self.clock_idx = clock_idx
         self.write_helper(duplicate_datas, clock_idx)
@@ -1332,18 +1333,7 @@ class RegisterArray:
         for _ in range(len(self.latchs) + 1):
             datas.append(data)
         return datas
-
-    def write_accumulator(self, data, clk):
-        """
-        clk is 'Acc Clock' (Page 357).
-        Page 347 has the detailed circuit. The Accumulator often gets special 
-        direct writes from the ALU outside of the standard register selection.
-        """
-        self.clock_idx = len(self.clock_idx) * [0]
-        self.clock_idx[7] = self.or_gate_for_acc_clk([clk, self.clock_idx[7]])
-        assert (sum(self.clock_idx) == 1 and clk == 1) or ((sum(self.clock_idx) == 0 and clk == 0)), "FATAL: write_accumulator"
-        self.write_helper(self.duplicate_data_to_each_latch(data), self.clock_idx)
-        
+    
     def write_helper(self, datas, clock_idx):
         for idx, clk in enumerate(clock_idx):
             if idx == 6: # Watch out: index 6 is [1, 1, 0] (Memory), skip local latches
@@ -1885,4 +1875,162 @@ class BasicTiming:
         self.cycle_clock = clk_input_to_counter
         self.pulse = pulse
 
+class CPUSubSet_8080:
+    """
+    The Ultimate Intel 8080 CPU Subset (The Motherboard).
+    Integrates all independent hardware components onto a shared Address Bus 
+    and Data Bus. Driven by a central Oscillator and the Master Control Unit.
+    """
+    def __init__(self, data_nbits=8, addr_nbits=16):
+        self.data_nbits = data_nbits
+        self.addr_nbits = addr_nbits
+        
+        # 1. Instruction Latch (Holds Opcode and Immediates)
+        self.inst_latch = InstLatch(self.data_nbits)
+        # 2. Arithmetic Logic Unit (The Brain)
+        self.alu = ALU(self.data_nbits)
+        # 3. Register Array (A, B, C, D, E, H, L)
+        self.ra = RegisterArray(self.data_nbits)
+        # 4. 64-Kilobyte Random Access Memory
+        self.ram = RAM_64KB(self.data_nbits)
+        # 5. Program Counter (Tracks current execution address)
+        self.pc = ProgramCounter()
+        # 6. Incrementer / Decrementer (16-bit Math for Addresses)
+        self.inc_dec = IncrementerDecrementer()
+
+        # Timing and Control
+        self.timing = BasicTiming()
+        self.control = ControlSignal()
+
+        # System Buses
+        # Data Bus (Page 345 and 347): Connects RAM, ALU, RA(Standard Regs), RA(Accumulator), InstLatch2
+        self.data_bus = DataBus(num_buffers=5, nbits=self.data_nbits) 
+        
+        # Address Bus (Page 353): Connects InstLatch 2&3, PC, Incr/Decr, RA(HL pointer)
+        self.addr_bus = DataBus(num_buffers=4, nbits=self.addr_nbits) 
+
+        self.current_halt_state = 0
+
+    def reset(self):
+        """
+        Simulates pressing the physical 'RESET' button on the motherboard.
+        Pulses the reset line high, then low, clearing all flip-flops in the Control Unit.
+        """
+        # Assert Reset High
+        self.timing(clock=0, reset=1, halt=0)
+        self.control(cycle_clk=0, pulse=0, reset=1, latch1=[0]*8)
+        
+        # Release Reset Low
+        self.timing(clock=0, reset=0, halt=0)
+        self.control(cycle_clk=0, pulse=0, reset=0, latch1=[0]*8)
+        
+    def load_program(self, program_data, start_address=0):
+        """
+        Hardware Programmer Helper.
+        Flashes a list of binary byte instructions directly into RAM before boot.
+        """
+        current_addr = start_address
+        for byte_val in program_data:
+            addr_bits = int_to_16bit_list(current_addr)
+            data_bits = int_to_8bit_list(byte_val)
+            self.ram(addr_bits, data_bits, write=1)
+            current_addr += 1
+
+    def tick(self, oscillator_clk, external_reset=0):
+        """
+        Executes exactly ONE simulated clock tick (Rising or Falling edge).
+        Evaluates the entire motherboard wiring simultaneously.
+        """
+        # 1. Update master timing 
+        self.timing(oscillator_clk, reset=external_reset, halt=self.current_halt_state)
+        cycle_clk = self.timing.read_cycle_clk()
+        pulse = self.timing.read_pulse()
+
+        # 2. Get current instruction opcode (Opcode is always stored in Latch 1)
+        # NOTE (Hardware Physics): 
+        # If the next cycle clock is Fetch 1, the current_opcode sitting in Latch 1 
+        # is actually garbage from the previous instruction. But it's okay! The Control 
+        # Unit knows this is Fetch 1 and will safely ignore the garbage opcode until 
+        # it is overwritten at the end of the pulse.
+        current_opcode = self.inst_latch.read_latch1()
+
+        # 3. Control Unit calculates all bus routing signals
+        signals = self.control(cycle_clk=cycle_clk, pulse=pulse, reset=external_reset, latch1=current_opcode)
+
+        # Helper to extract 1 or 0 from the signals dictionary securely
+        def get_sig(name):
+            val = signals[name]
+            return val[0] if isinstance(val, list) else val
+        
+        # 4. ADDRESS BUS ROUTING
+        # Open the specific Tri-State buffer allowed by the Control Unit
+        current_address = self.addr_bus([
+            self.pc.readAddr(enable=get_sig("pc_enable")),
+            self.inc_dec.readAddr(dec_enable=get_sig("dec_enable"), inc_enable=get_sig("inc_enable")),
+            self.ra.read_hl(enable_hl=get_sig("hl_enable")),
+            self.inst_latch.read_latch2_3(enable_2_3=get_sig("inst_latch2_3_enable")),
+        ])
+
+        # 5. DATA BUS ROUTING
+        # Pull data from whatever component currently owns the data bus
+        current_data = self.data_bus([
+            self.ram.read(current_address, enable=get_sig("ram_data_out_enable")),
+            
+            # NOTE: Read port uses Source Register SSS (Bits C2, C1, C0 -> [5:8])
+            self.ra.read_register(select=current_opcode[5:8], enable=get_sig("ra_enable")),
+            self.inst_latch.read_latch2(enable=get_sig("inst_latch_2_enable")),
+            self.ra.read_accumulator(enable=get_sig("acc_enable")),                  
+            self.alu.read_out(enable=get_sig("alu_enable")),                         
+        ])
+
+        # 6. EXECUTE WRITES (Clock Pulses)
+        # Send the current Address Bus and Data Bus signals to all components.
+        # Only the components receiving a clock pulse (1) will actually save the data.
+        self.inc_dec(addrs=current_address, clock=get_sig("inc_dec_clk"))
+
+        self.inst_latch.write_latch1(data=current_data, clock_idx=get_sig("inst_latch_1_clk"))
+        self.inst_latch.write_latch2(data=current_data, clock_idx=get_sig("inst_latch_2_clk"))
+        self.inst_latch.write_latch3(data=current_data, clock_idx=get_sig("inst_latch_3_clk"))
+
+        self.pc(addr=current_address, clk=get_sig("pc_clk"))
+        
+        # NOTE: Write port uses Destination Register DDD (Bits C5, C4, C3 -> [2:5])        
+        self.ra(data=current_data, 
+                select=current_opcode[2:5], 
+                clock=get_sig("ra_clk"), 
+                hl_select=get_sig("hl_select"), 
+                hl_clock=get_sig("hl_clk"), 
+                addr=current_address,
+                acc_clk=get_sig("acc_clk"))
+        
+        self.ram(address=current_address, data_in=current_data, write=get_sig("ram_write_enable"))         
+        # =====================================================================
+        # EDUCATIONAL NOTE (Hardware Physics - Page 345):
+        # Notice that the B input and the Out output of the ALU are both connected 
+        # to the Data Bus. However, the A input is connected directly to the Acc 
+        # output of the register array! 
+        # Therefore, input_A reading the accumulator is ALWAYS valid and does not 
+        # need to wait for bus arbitration.
+        # =====================================================================
+        self.alu(input_A=self.ra.read_accumulator(enable=1), input_B=current_data, 
+                 F2_0=current_opcode[2:5], clock=get_sig("alu_clk")) 
+
+        # Handle hardware interrupts (Halt)
+        self.current_halt_state = get_sig("halt")
+
+        # --- Debug Print during the Pulse ---
+        if pulse == 1 and self.current_halt_state == 0:
+            pc_hex = f"{bit_list_to_int(self.pc.readAddr(enable=1), signed=False):04X}"
+            op_hex = f"{bit_list_to_int(current_opcode, signed=False):02X}"
+            addr_hex = f"{bit_list_to_int(current_address, signed=False):04X}"
+            data_hex = f"{bit_list_to_int(current_data, signed=False):02X}"
+            print(f"[PULSE] PC: {pc_hex} | AddrBus: {addr_hex} | DataBus: {data_hex} | Latch 1 (Opcode): {op_hex}")
+        # self.print_value_is_1(signals)
+
+    def print_value_is_1(self, raw_bus):
+        print(f"-------------------------------------")
+        for k, v in raw_bus.items():
+            if v == 1:
+                print(f"{k} is 1")
+        print(f"-------------------------------------")
 # ------------------------- end ch23 ----------------------------------
