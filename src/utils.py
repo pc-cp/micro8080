@@ -1943,11 +1943,12 @@ class CPUSubSet_8080:
 
         self.current_halt_state = 0
 
-    def reset(self):
+    def reset(self, start_address = 0x0000):
         """
         Simulates pressing the physical 'RESET' button on the motherboard.
         Pulses the reset line high, then low, clearing all flip-flops in the Control Unit.
         """
+        self.pc.SetAddr(int_to_16bit_list(start_address))
         # Assert Reset High
         self.timing(clock=0, reset=1, halt=0)
         self.control(cycle_clk=0, pulse=0, reset=1, latch1=[0]*8)

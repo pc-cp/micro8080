@@ -43,19 +43,19 @@ def test_page_340_lda_sta_add():
     system_tick = Oscillator()
     
     program = [
-        0x3A, 0x44, 0x20, # 0000h: LDA 2044h (Load A from 2044h)
-        0x06, 0x33,       # 0003h: MVI B, 33h  (Load 33h into B)
-        0x80,             # 0005h: ADD B       (Add B to A)
-        0x32, 0x44, 0x20, # 0006h: STA 2044h   (Store A to 2044h)
-        0x76              # 0009h: HLT         (Halt CPU)
+        0x3A, 0x44, 0x20, # 0005h: LDA 2044h (Load A from 2044h)
+        0x06, 0x33,       # 0008h: MVI B, 33h  (Load 33h into B)
+        0x80,             # 000Ah: ADD B       (Add B to A)
+        0x32, 0x44, 0x20, # 000Bh: STA 2044h   (Store A to 2044h)
+        0x76              # 000Eh: HLT         (Halt CPU)
     ]
-    
-    cpu.load_program(program, start_address=0x0000)
+    start_address=0x0005
+    cpu.load_program(program, start_address=start_address)
     
     # Inject initial data into RAM
     target_address = int_to_16bit_list(0x2044)
     cpu.ram(target_address, int_to_8bit_list(0x66), write=1)
-    cpu.reset()
+    cpu.reset(start_address)
     
     for _ in range(1000):
         cpu.tick(system_tick.level())
