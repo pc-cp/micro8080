@@ -1587,6 +1587,7 @@ class ControlSignal:
 
         self.or_gate_3_in = OR(3)
         self.or_gate_2_in = OR()
+        self.or_gate_7_in = OR(7)
 
         self.my_counter = Counter4Bit()
         self.decoder = Decoder_4_16()
@@ -1599,12 +1600,13 @@ class ControlSignal:
         
         self.bus1_in_addr_bus_execute = DataBus(num_buffers=6, nbits=1)
         self.bus2_in_addr_bus_execute = DataBus(num_buffers=2, nbits=1)
+        self.bus3_in_addr_bus_execute = DataBus(num_buffers=3, nbits=1)
 
         self.bus1_in_data_bus_execute = DataBus(num_buffers=3, nbits=1)
 
         self.tri_buffer_4_in = TriStateBuffer(4)
 
-    def __call__(self, cycle_clk, pulse, reset, latch1):
+    def __call__(self, cycle_clk, pulse, reset, latch1, flags=[0]*3):
         self.my_counter(cycle_clk)
         output_of_decoder = self.decoder(self.my_counter.getQs())
         assert len(latch1) == self.nbits_of_latch
@@ -1628,6 +1630,17 @@ class ControlSignal:
 
         lda_p366 = self.and_gate_3_in([output_of_c2_c1_c0_p366[2], output_of_c5_c4_c3_p366[7], output_of_c7_c6_p366[0]])
         sta_p366 = self.and_gate_3_in([output_of_c2_c1_c0_p366[2], output_of_c5_c4_c3_p366[6], output_of_c7_c6_p366[0]])
+
+# page 388: JUMP
+        jmp_p388 = self.and_gate_3_in([output_of_c7_c6_p366[3], output_of_c5_c4_c3_p366[0], output_of_c2_c1_c0_p366[3]])
+        jnz_p388 = self.and_gate_3_in([output_of_c7_c6_p366[3], output_of_c5_c4_c3_p366[0], output_of_c2_c1_c0_p366[2]])
+        jz_p388 = self.and_gate_3_in([output_of_c7_c6_p366[3], output_of_c5_c4_c3_p366[1], output_of_c2_c1_c0_p366[2]])
+        jnc_p388 = self.and_gate_3_in([output_of_c7_c6_p366[3], output_of_c5_c4_c3_p366[2], output_of_c2_c1_c0_p366[2]])
+        jc_p388 = self.and_gate_3_in([output_of_c7_c6_p366[3], output_of_c5_c4_c3_p366[3], output_of_c2_c1_c0_p366[2]])
+        jp_p388 = self.and_gate_3_in([output_of_c7_c6_p366[3], output_of_c5_c4_c3_p366[6], output_of_c2_c1_c0_p366[2]])
+        jm_p388 = self.and_gate_3_in([output_of_c7_c6_p366[3], output_of_c5_c4_c3_p366[7], output_of_c2_c1_c0_p366[2]])
+        pchl_p388 = self.and_gate_3_in([output_of_c7_c6_p366[3], output_of_c5_c4_c3_p366[5], output_of_c2_c1_c0_p366[1]])
+        jump_group_p388 = self.or_gate_7_in([jmp_p388, jnz_p388, jz_p388, jnc_p388, jc_p388, jp_p388, jm_p388])
 # page 367 first part
 # --------------------------------------------------------------------------------------------------
         move_r_r_p367 = self.and_gate_3_in([move_group_p366, self.invert_gate([memory_source_p366]), self.invert_gate([memory_destination_p366])])
@@ -1644,7 +1657,7 @@ class ControlSignal:
 # page 367 second part
 # --------------------------------------------------------------------------------------------------
         fetch_2_byte_p367 = self.or_gate_3_in([mvi_r_data_p367, mvi_M_data_p367, adi_data_p366])
-        fetch_3_byte_p367 = self.or_gate_2_in([lda_p366, sta_p366])
+        fetch_3_byte_p367 = self.or_gate_3_in([lda_p366, sta_p366, jump_group_p388])
         fetch_1_byte_invert_p367 = self.or_gate_2_in([fetch_2_byte_p367, fetch_3_byte_p367])
         fetch_1_byte_p367 = self.invert_gate([fetch_1_byte_invert_p367])
         
@@ -1737,6 +1750,25 @@ class ControlSignal:
                                                                            
         hl_clk_addr_bus_exec_phrase_2_p374 = self.tri_buffer_1_in([self.bus2_in_addr_bus_execute([inx_hl_p366, 
                                                                       dcx_hl_p366])[0]], execute_pulse_2_decode_phrase_p373)[0]
+        # flags[0]: Sign(S), flags[1]: Zero(Z), flags[2]: Carry(CY)
+        conditional_jump_p389 = self.or_gate_7_in([self.and_gate_2_in([jnz_p388, self.invert_gate([flags[1]])]), 
+                                              self.and_gate_2_in([jz_p388, flags[1]]), 
+                                              self.and_gate_2_in([jnc_p388, self.invert_gate([flags[2]])]), 
+                                              self.and_gate_2_in([jc_p388, flags[2]]), 
+                                              self.and_gate_2_in([jp_p388, self.invert_gate([flags[0]])]), 
+                                              self.and_gate_2_in([jm_p388, flags[0]]), 0])
+        
+        hl_enable_addr_bus_exec_phrase_1_p389, inst_latch2_3_enable_addr_bus_exec_phrase_1_p389 = self.tri_buffer_2_in([pchl_p388, self.bus2_in_addr_bus_execute([jmp_p388,
+                                                                                                              conditional_jump_p389])[0]], exec_cycle_1_out_p370)
+
+        pc_clock_addr_bus_exec_phrase_1_p389 = self.tri_buffer_1_in([self.bus3_in_addr_bus_execute([jmp_p388, 
+                                                                                                    conditional_jump_p389, 
+                                                                                                    pchl_p388])[0]], execute_pulse_1_decode_phrase_p373)[0]
+        
+        hl_enable_final = self.or_gate_2_in([hl_enable_addr_bus_exec_phrase_1_p374, hl_enable_addr_bus_exec_phrase_1_p389])
+        inst_latch2_3_enable_final = self.or_gate_2_in([inst_latch2_3_enable_addr_bus_exec_phrase_1_p374, inst_latch2_3_enable_addr_bus_exec_phrase_1_p389])
+        pc_clock_final = self.or_gate_2_in([program_counter_clk_fetch_phrase_p372, pc_clock_addr_bus_exec_phrase_1_p389])
+        
 # page 375
 # --------------------------------------------------------------------------------------------------
         ra_enable_data_bus_exec_phrase_1_p375, ram_data_out_enable_data_bus_exec_phrase_1_p375, inst_latch2_enable_data_bus_exec_phrase_1_p375, acc_enable_data_bus_exec_phrase_1_p375 = self.tri_buffer_4_in([self.bus1_in_data_bus_execute([move_r_r_p367,
@@ -1799,7 +1831,7 @@ class ControlSignal:
         # Pack the Control Bus ribbon cable!
         control_bus = {
             "pc_enable": program_counter_enable_p372,
-            "pc_clk": program_counter_clk_fetch_phrase_p372,
+            "pc_clk": pc_clock_final, #program_counter_clk_fetch_phrase_p372,
             "inc_dec_clk": final_inc_dec_clk,
             "inc_enable": final_increment_enable,
             "dec_enable": dec_enable_addr_bus_exec_phrase_2_p374,
@@ -1808,14 +1840,14 @@ class ControlSignal:
             "inst_latch_2_clk": instru_latch_2_clk_p372,
             "inst_latch_3_clk": instru_latch_3_clk_p372,
             "inst_latch_2_enable": inst_latch2_enable_data_bus_exec_phrase_1_p375,
-            "inst_latch2_3_enable": inst_latch2_3_enable_addr_bus_exec_phrase_1_p374,
+            "inst_latch2_3_enable": inst_latch2_3_enable_final, #inst_latch2_3_enable_addr_bus_exec_phrase_1_p374,
 
             "ram_data_out_enable": final_ram_data_out_enable,
             "ram_write_enable": ram_write_enable_data_bus_exec_phrase_1_p375,
 
             "ra_enable": ra_enable_data_bus_exec_phrase_1_p375,
             "ra_clk": ra_clk_data_bus_exec_phrase_1_p375,
-            "hl_enable": hl_enable_addr_bus_exec_phrase_1_p374,
+            "hl_enable": hl_enable_final, #hl_enable_addr_bus_exec_phrase_1_p374,
             "hl_select": hl_select_enable_addr_bus_exec_phrase_2_p374,
             "hl_clk": hl_clk_addr_bus_exec_phrase_2_p374,
             "acc_enable": acc_enable_data_bus_exec_phrase_1_p375,
@@ -1955,7 +1987,7 @@ class CPUSubSet_8080:
         current_opcode = self.inst_latch.read_latch1()
 
         # 3. Control Unit calculates all bus routing signals
-        signals = self.control(cycle_clk=cycle_clk, pulse=pulse, reset=external_reset, latch1=current_opcode)
+        signals = self.control(cycle_clk=cycle_clk, pulse=pulse, reset=external_reset, latch1=current_opcode, flags=self.alu.read_flags())
 
         # Helper to extract 1 or 0 from the signals dictionary securely
         def get_sig(name):
